@@ -202,10 +202,6 @@ export default function ResultsBoard({
                         <button onClick={onRefresh} className="flex items-center gap-2 px-5 py-3 bg-slate-100 text-slate-600 border border-slate-200 rounded-2xl hover:bg-slate-900 hover:text-white transition-all text-[10px] font-black uppercase">
                             <RefreshCw size={14}/> Làm mới Cloud
                         </button>
-                        <button onClick={() => document.getElementById('import-results-csv')?.click()} className="flex items-center gap-2 px-5 py-3 bg-blue-50 text-blue-600 border border-blue-100 rounded-2xl hover:bg-blue-600 hover:text-white transition-all text-[10px] font-black uppercase">
-                            <FileText size={14}/> Nạp CSV
-                            <input id="import-results-csv" type="file" accept=".csv" className="hidden" onChange={onImportCsv}/>
-                        </button>
                         <button onClick={onClearCache} className="flex items-center gap-2 px-5 py-3 bg-red-50 text-red-600 border border-red-100 rounded-2xl hover:bg-red-600 hover:text-white transition-all text-[10px] font-black uppercase">
                             <Eraser size={14}/> Xóa sạch Cache
                         </button>
