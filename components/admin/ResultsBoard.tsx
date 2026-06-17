@@ -150,7 +150,7 @@ export default function ResultsBoard({
     };
 
     const naCount = results.filter(r => !r.studentCode || r.studentCode === 'N/A').length;
-    const relevantChapters = chapters.filter(c => rGradeFilter === 'all' || c.grade === rGradeFilter);
+    const relevantChapters = chapters.filter(c => rGradeFilter === 'all' || String(c.grade) === String(rGradeFilter));
     const relevantQuizzes = quizzes.filter(q => 
         (rGradeFilter === 'all' || q.grade === rGradeFilter) &&
         (rChapterFilter === 'all' || q.category === rChapterFilter)
@@ -235,7 +235,7 @@ export default function ResultsBoard({
                         <label className="text-[9px] font-black text-slate-400 uppercase ml-2 flex items-center gap-1"><Filter size={10}/> Chương học</label>
                         <select className="w-full bg-slate-50 border rounded-2xl p-4 text-xs font-black uppercase outline-none focus:border-blue-400" value={rChapterFilter} onChange={e => { setRChapterFilter(e.target.value); setRQuizFilter('all'); }}>
                             <option value="all">Tất cả Chương</option>
-                            {relevantChapters.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                            {relevantChapters.map(c => <option key={c.id} value={c.name}>{c.name || (c as any).title || "Chương chưa đặt tên"}</option>)}
                         </select>
                     </div>
                     <div className="space-y-1">
