@@ -5,21 +5,13 @@ import { createClient } from '@supabase/supabase-js';
 import { User, Quiz, Result, Chapter, Question, ExamSession, PublishedResult, Grade } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
-let envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
-if (envUrl.includes('orhzaveaerpklscqqhnq')) {
-    envUrl = '';
-}
-let cleanedUrl = envUrl || 'https://lchfhsioxvgkjfsikycl.supabase.co';
+let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://lchfhsioxvgkjfsikycl.supabase.co').trim();
 if (cleanedUrl.endsWith('/rest/v1') || cleanedUrl.endsWith('/rest/v1/')) {
     cleanedUrl = cleanedUrl.replace(/\/rest\/v1\/?$/, '');
 }
 const SUPABASE_URL = cleanedUrl;
 
-let envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
-if (envKey.includes('orhzaveaerpklscqqhnq') || envKey.includes('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yaHphdmVhZXJwa2xzY3FxaG5x') || !envKey) {
-    envKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjaGZoc2lveHZna2pmc2lreWNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NTI3MDksImV4cCI6MjA4MDUyODcwOX0.toOc2ytPzo_cqhpQyd0YOLq4Zvk3BtfdZSziXN__j8Q';
-}
-const SUPABASE_KEY = envKey;
+const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjaGZoc2lveHZna2pmc2lreWNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NTI3MDksImV4cCI6MjA4MDUyODcwOX0.toOc2ytPzo_cqhpQyd0YOLq4Zvk3BtfdZSziXN__j8Q').trim();
 
 let supabase: any = null;
 
