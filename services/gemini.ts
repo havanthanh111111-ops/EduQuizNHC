@@ -341,8 +341,10 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
             });
         }
 
+        let rawCorrectVal = q.correctAnswer ?? q.answer ?? q.correct ?? q.dap_an_dung ?? q.dap_an ?? q.correctOptionIndex ?? q.correct_option_index ?? q.correctIndex ?? q.correct_index ?? q.answerIndex;
+
         let options: string[] | undefined = undefined;
-        let correctAnswer = q.correctAnswer || q.answer || q.correct || q.dap_an_dung || q.dap_an || '';
+        let correctAnswer = '';
 
         if (type === 'mcq' && Array.isArray(rawOptionsArray)) {
             options = rawOptionsArray.map((opt: any) => {
@@ -351,17 +353,42 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
             });
 
             // Tìm đáp án đúng nếu nằm trong thuộc tính isCorrect của option object
-            if (!correctAnswer) {
-                const correctObj = rawOptionsArray.find((opt: any) => typeof opt === 'object' && (opt.isCorrect === true || opt.is_correct === true || opt.correct === true));
-                if (correctObj) {
-                    const str = typeof correctObj === 'string' ? correctObj : (correctObj.text || correctObj.content || correctObj.label || String(correctObj));
-                    correctAnswer = str.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$');
-                } else {
-                    const idx = q.correctOptionIndex ?? q.correct_option_index ?? q.correctIndex ?? q.correct_index ?? q.answerIndex;
-                    if (typeof idx === 'number' && idx >= 0 && idx < options.length) {
-                        correctAnswer = options[idx];
+            const correctObj = rawOptionsArray.find((opt: any) => typeof opt === 'object' && (opt.isCorrect === true || opt.is_correct === true || opt.correct === true));
+            if (correctObj) {
+                const str = typeof correctObj === 'string' ? correctObj : (correctObj.text || correctObj.content || correctObj.label || String(correctObj));
+                correctAnswer = str.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$');
+            } else if (rawCorrectVal !== undefined && rawCorrectVal !== null && rawCorrectVal !== '') {
+                if (typeof rawCorrectVal === 'number') {
+                    if (rawCorrectVal >= 0 && rawCorrectVal < options.length) {
+                        correctAnswer = options[rawCorrectVal];
+                    } else {
+                        correctAnswer = String(rawCorrectVal);
+                    }
+                } else if (typeof rawCorrectVal === 'string') {
+                    const trimmed = rawCorrectVal.trim();
+                    if (/^\d+$/.test(trimmed)) {
+                        const idx = parseInt(trimmed, 10);
+                        if (idx >= 0 && idx < options.length) {
+                            correctAnswer = options[idx];
+                        } else {
+                            correctAnswer = trimmed;
+                        }
+                    } else if (/^[A-Da-d][\.\:\s]*$/.test(trimmed)) {
+                        const letter = trimmed.charAt(0).toUpperCase();
+                        const idx = letter.charCodeAt(0) - 65;
+                        if (idx >= 0 && idx < options.length) {
+                            correctAnswer = options[idx];
+                        } else {
+                            correctAnswer = trimmed;
+                        }
+                    } else {
+                        correctAnswer = trimmed;
                     }
                 }
+            }
+        } else {
+            if (rawCorrectVal !== undefined && rawCorrectVal !== null) {
+                correctAnswer = String(rawCorrectVal).trim();
             }
         }
 
