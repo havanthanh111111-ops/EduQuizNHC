@@ -369,31 +369,31 @@ export default function QuizEditor(props: QuizEditorProps) {
                     Tổng điểm đề: {totalPoints.toFixed(2)}đ
                 </div>
                 
-                <div className="flex flex-col md:flex-row items-center justify-between gap-8 border-b-2 border-slate-50 pb-10">
-                    <div className="flex-1 w-full space-y-1">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 border-b-2 border-slate-50 pb-8">
+                    <div className="flex-1 min-w-0 space-y-1">
                         <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Tiêu đề đề thi</label>
-                        <input type="text" className="text-3xl font-black outline-none bg-transparent w-full uppercase placeholder:text-slate-100 focus:text-blue-600 transition-colors" placeholder="VD: KIỂM TRA CHƯƠNG I ĐẠO HÀM..." value={props.title} onChange={e => props.setTitle(e.target.value)} />
+                        <input type="text" className="text-2xl font-black outline-none bg-transparent w-full uppercase placeholder:text-slate-200 focus:text-blue-600 transition-colors" placeholder="VD: KIỂM TRA CHƯƠNG I ĐẠO HÀM..." value={props.title} onChange={e => props.setTitle(e.target.value)} />
                     </div>
-                    <div className="flex flex-wrap gap-3">
-                        <label className="flex items-center gap-3 px-6 py-5 bg-amber-500 text-white rounded-[2rem] text-xs font-black uppercase cursor-pointer hover:bg-amber-600 transition-all shadow-2xl active:scale-95" title="Nhập trực tiếp file .json (Không tốn lượt AI)">
-                            <FileCode size={20}/> NHẬP TỪ JSON (0% AI)
+                    <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                        <label className="flex items-center gap-2 px-3.5 py-2.5 bg-amber-500 text-white rounded-xl text-[11px] font-black uppercase cursor-pointer hover:bg-amber-600 transition-all shadow-md active:scale-95" title="Nhập trực tiếp file .json (Không tốn lượt AI)">
+                            <FileCode size={15}/> NHẬP TỪ JSON (0% AI)
                             <input type="file" accept=".json,application/json" className="hidden" onChange={handleJsonFileSelect}/>
                         </label>
                         <button 
                             onClick={props.onCleanLabels}
-                            className="flex items-center gap-3 px-6 py-5 bg-emerald-50 text-emerald-600 border-2 border-emerald-100 rounded-[2rem] text-xs font-black uppercase hover:bg-emerald-600 hover:text-white transition-all shadow-xl active:scale-95"
+                            className="flex items-center gap-2 px-3.5 py-2.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-xl text-[11px] font-black uppercase hover:bg-emerald-600 hover:text-white transition-all shadow-sm active:scale-95"
                             title="Xóa bỏ các nhãn A., B., a), b) dư thừa trong nội dung câu hỏi"
                         >
-                            <Zap size={20}/> DỌN DẸP NHÃN
+                            <Zap size={15}/> DỌN DẸP NHÃN
                         </button>
                         <button 
                             onClick={() => setIsTextInputOpen(true)}
-                            className={`flex items-center gap-3 px-6 py-5 bg-blue-600 text-white rounded-[2rem] text-xs font-black uppercase hover:bg-black transition-all shadow-2xl active:scale-95 ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            className={`flex items-center gap-2 px-3.5 py-2.5 bg-blue-600 text-white rounded-xl text-[11px] font-black uppercase hover:bg-black transition-all shadow-md active:scale-95 ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                         >
-                            <TypeIcon size={20}/> NHẬP TỪ VĂN BẢN (AI)
+                            <TypeIcon size={15}/> NHẬP TỪ VĂN BẢN (AI)
                         </button>
-                        <label className={`flex items-center gap-3 px-6 py-5 bg-slate-900 text-white rounded-[2rem] text-xs font-black uppercase cursor-pointer hover:bg-black transition-all shadow-2xl active:scale-95 ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                            <FileUp size={20}/> NHẬP TỪ PDF (AI)
+                        <label className={`flex items-center gap-2 px-3.5 py-2.5 bg-slate-900 text-white rounded-xl text-[11px] font-black uppercase cursor-pointer hover:bg-black transition-all shadow-md active:scale-95 ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                            <FileUp size={15}/> NHẬP TỪ PDF (AI)
                             <input type="file" accept="application/pdf" className="hidden" disabled={props.isAiLoading} onChange={props.onPdfExtract}/>
                         </label>
                     </div>
