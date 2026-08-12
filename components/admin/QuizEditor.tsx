@@ -1,9 +1,10 @@
 
 import React, { useState } from 'react';
 import { Quiz, Question, Grade, QuestionType, Chapter, QuizType } from '../../types';
-import { Save, FileUp, Database, CheckCircle2, HelpCircle, AlignLeft, Trash2, Target as TargetIcon, Plus, ImageIcon, Loader2, Lightbulb, Eye, ImageMinus, ShieldAlert, ShieldCheck, Sparkles, Zap, Type as TypeIcon, X, Link as LinkIcon, EyeOff } from 'lucide-react';
+import { Save, FileUp, Database, CheckCircle2, HelpCircle, AlignLeft, Trash2, Target as TargetIcon, Plus, ImageIcon, Loader2, Lightbulb, Eye, ImageMinus, ShieldAlert, ShieldCheck, Sparkles, Zap, Type as TypeIcon, X, Link as LinkIcon, EyeOff, FileCode } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import LatexText from '../LatexText';
+import { parseQuestionsFromJSON } from '../../services/gemini';
 
 interface QuizEditorProps {
     editingId: string | null;
@@ -266,9 +267,52 @@ export default function QuizEditor(props: QuizEditorProps) {
 
     const handleConfirmTextExtract = () => {
         if (!pastedText.trim()) return;
+        const trimmed = pastedText.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+            try {
+                const result = parseQuestionsFromJSON(trimmed);
+                props.setQuestions([...props.questions, ...result.questions]);
+                if (result.quizTitle && !props.title) props.setTitle(result.quizTitle);
+                if (result.grade) props.setGrade(result.grade);
+                if (result.category) props.setCategory(result.category);
+                if (result.durationMinutes) props.setDuration(result.durationMinutes);
+                setPastedText('');
+                setIsTextInputOpen(false);
+                alert(`🎉 Phát hiện chuỗi JSON! Đã nhập thành công ${result.questions.length} câu hỏi (0% AI, đầy đủ đáp án & lời giải).`);
+                return;
+            } catch (jsonErr: any) {
+                console.warn("Thử parse JSON thất bại, tiếp tục bóc tách qua AI:", jsonErr);
+            }
+        }
         props.onTextExtract(pastedText);
         setPastedText('');
         setIsTextInputOpen(false);
+    };
+
+    const handleJsonFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    const content = reader.result as string;
+                    const result = parseQuestionsFromJSON(content);
+                    props.setQuestions([...props.questions, ...result.questions]);
+                    if (result.quizTitle && !props.title) props.setTitle(result.quizTitle);
+                    if (result.grade) props.setGrade(result.grade);
+                    if (result.category) props.setCategory(result.category);
+                    if (result.durationMinutes) props.setDuration(result.durationMinutes);
+                    alert(`🎉 Đã bóc tách thành công ${result.questions.length} câu hỏi từ file JSON mà KHÔNG tốn lượt AI nào! (Bao gồm đầy đủ đáp án & lời giải chi tiết)`);
+                } catch (err: any) {
+                    alert("❌ Lỗi cấu trúc JSON: " + err.message);
+                }
+            };
+            reader.readAsText(file, "UTF-8");
+        } catch (err: any) {
+            alert("Lỗi đọc file JSON: " + err.message);
+        }
+        e.target.value = '';
     };
 
     return (
@@ -303,11 +347,11 @@ export default function QuizEditor(props: QuizEditorProps) {
                         </div>
                         <div className="p-8 space-y-6">
                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-relaxed">
-                                Copy nội dung đề từ Word hoặc Web dán vào đây. Hệ thống AI sẽ tự nhận diện Câu hỏi, Đáp án và Lời giải.
+                                Copy nội dung đề từ Word/Web dán vào đây (Nếu dán chuỗi JSON hệ thống sẽ tự động tách câu hỏi 0% AI, nếu dán văn bản thường AI sẽ bóc tách).
                             </p>
                             <textarea 
                                 className="w-full h-80 p-6 bg-slate-50 border-2 border-slate-100 rounded-[2rem] outline-none font-medium text-sm focus:border-blue-400 transition-all"
-                                placeholder="Dán nội dung tại đây..."
+                                placeholder="Dán nội dung văn bản hoặc chuỗi JSON tại đây..."
                                 value={pastedText}
                                 onChange={e => setPastedText(e.target.value)}
                             />
@@ -331,6 +375,10 @@ export default function QuizEditor(props: QuizEditorProps) {
                         <input type="text" className="text-3xl font-black outline-none bg-transparent w-full uppercase placeholder:text-slate-100 focus:text-blue-600 transition-colors" placeholder="VD: KIỂM TRA CHƯƠNG I ĐẠO HÀM..." value={props.title} onChange={e => props.setTitle(e.target.value)} />
                     </div>
                     <div className="flex flex-wrap gap-3">
+                        <label className="flex items-center gap-3 px-6 py-5 bg-amber-500 text-white rounded-[2rem] text-xs font-black uppercase cursor-pointer hover:bg-amber-600 transition-all shadow-2xl active:scale-95" title="Nhập trực tiếp file .json (Không tốn lượt AI)">
+                            <FileCode size={20}/> NHẬP TỪ JSON (0% AI)
+                            <input type="file" accept=".json,application/json" className="hidden" onChange={handleJsonFileSelect}/>
+                        </label>
                         <button 
                             onClick={props.onCleanLabels}
                             className="flex items-center gap-3 px-6 py-5 bg-emerald-50 text-emerald-600 border-2 border-emerald-100 rounded-[2rem] text-xs font-black uppercase hover:bg-emerald-600 hover:text-white transition-all shadow-xl active:scale-95"
