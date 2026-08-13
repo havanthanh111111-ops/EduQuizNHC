@@ -270,25 +270,51 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
     if (Array.isArray(parsed)) {
         rawQuestions = parsed;
     } else if (parsed && typeof parsed === 'object') {
-        if (parsed.title || parsed.quizTitle || parsed.name) {
-            quizTitle = parsed.title || parsed.quizTitle || parsed.name;
+        const infoObj = parsed.exam_info || parsed.info || parsed.metadata || parsed;
+        
+        if (infoObj.title || infoObj.quizTitle || infoObj.name || parsed.title || parsed.quizTitle || parsed.name) {
+            quizTitle = infoObj.title || infoObj.quizTitle || infoObj.name || parsed.title || parsed.quizTitle || parsed.name;
         }
-        if (parsed.grade) grade = String(parsed.grade) as Grade;
-        if (parsed.category || parsed.subject) category = parsed.category || parsed.subject;
-        if (parsed.durationMinutes || parsed.duration || parsed.timeLimit) durationMinutes = Number(parsed.durationMinutes || parsed.duration || parsed.timeLimit);
+        if (infoObj.grade || parsed.grade) grade = String(infoObj.grade || parsed.grade) as Grade;
+        if (infoObj.category || infoObj.subject || parsed.category || parsed.subject) category = infoObj.category || infoObj.subject || parsed.category || parsed.subject;
+        
+        const rawDur = infoObj.durationMinutes || infoObj.duration || infoObj.timeLimit || parsed.durationMinutes || parsed.duration || parsed.timeLimit;
+        if (rawDur) {
+            if (typeof rawDur === 'number') {
+                durationMinutes = rawDur;
+            } else if (typeof rawDur === 'string') {
+                const match = rawDur.match(/\d+/);
+                if (match) durationMinutes = parseInt(match[0], 10);
+            }
+        }
 
-        if (Array.isArray(parsed.questions)) {
-            rawQuestions = parsed.questions;
-        } else if (Array.isArray(parsed.data)) {
-            rawQuestions = parsed.data;
-        } else if (Array.isArray(parsed.items)) {
-            rawQuestions = parsed.items;
-        } else if (parsed.quiz && Array.isArray(parsed.quiz.questions)) {
-            rawQuestions = parsed.quiz.questions;
-        } else {
-            const possibleArray = Object.values(parsed).find(val => Array.isArray(val));
-            if (possibleArray) {
-                rawQuestions = possibleArray as any[];
+        // Extract questions from parts array or root questions arrays
+        if (Array.isArray(parsed.parts)) {
+            parsed.parts.forEach((part: any) => {
+                if (Array.isArray(part.questions)) {
+                    rawQuestions.push(...part.questions);
+                } else if (Array.isArray(part.data)) {
+                    rawQuestions.push(...part.data);
+                } else if (Array.isArray(part.items)) {
+                    rawQuestions.push(...part.items);
+                }
+            });
+        }
+        
+        if (rawQuestions.length === 0) {
+            if (Array.isArray(parsed.questions)) {
+                rawQuestions = parsed.questions;
+            } else if (Array.isArray(parsed.data)) {
+                rawQuestions = parsed.data;
+            } else if (Array.isArray(parsed.items)) {
+                rawQuestions = parsed.items;
+            } else if (parsed.quiz && Array.isArray(parsed.quiz.questions)) {
+                rawQuestions = parsed.quiz.questions;
+            } else {
+                const possibleArray = Object.values(parsed).find(val => Array.isArray(val));
+                if (possibleArray) {
+                    rawQuestions = possibleArray as any[];
+                }
             }
         }
     }
@@ -298,13 +324,13 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
     }
 
     const normalizedRaw = rawQuestions.map((q: any) => {
-        let typeStr = (q.type || q.questionType || '').toLowerCase().trim();
+        let typeStr = (q.type || q.qtype || q.questionType || q.question_type || '').toLowerCase().trim();
         let type = 'mcq';
-        if (typeStr === 'mc' || typeStr.includes('mcq') || typeStr.includes('trac_nghiem') || typeStr.includes('multiple')) {
+        if (typeStr === 'mc' || typeStr === 'part1' || typeStr.includes('mcq') || typeStr.includes('trac_nghiem') || typeStr.includes('multiple')) {
             type = 'mcq';
-        } else if (typeStr === 'tf' || typeStr.includes('group') || typeStr.includes('dung_sai') || typeStr.includes('true_false')) {
+        } else if (typeStr === 'tf' || typeStr === 'part2' || typeStr.includes('group') || typeStr.includes('dung_sai') || typeStr.includes('true_false')) {
             type = 'group-tf';
-        } else if (typeStr === 'sa' || typeStr.includes('short') || typeStr.includes('ngan') || typeStr.includes('tra_loi')) {
+        } else if (typeStr === 'sa' || typeStr === 'part3' || typeStr.includes('short') || typeStr.includes('ngan') || typeStr.includes('tra_loi')) {
             type = 'short';
         } else {
             if (q.subQuestions || q.sub_questions || q.statements || q.y_con) {
@@ -316,24 +342,34 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
             }
         }
 
-        const rawOptionsArray = q.options || q.choices || q.phuong_an || q.dap_an_lua_chon || q.answers;
+        // Raw options: can be Array or Object (e.g. { "A": "...", "B": "..." })
+        const rawOptions = q.options || q.choices || q.phuong_an || q.dap_an_lua_chon || q.answers;
+        let optionsObj: Record<string, any> | null = null;
+        let rawOptionsArray: any[] | null = null;
+
+        if (Array.isArray(rawOptions)) {
+            rawOptionsArray = rawOptions;
+        } else if (rawOptions && typeof rawOptions === 'object') {
+            optionsObj = rawOptions;
+            rawOptionsArray = Object.values(rawOptions);
+        }
 
         let subQuestions = q.subQuestions || q.sub_questions || q.statements || q.y_con;
         
         // Trường hợp câu hỏi Đúng/Sai (TF) mà danh sách mệnh đề nằm trong q.options
-        if (type === 'group-tf' && !subQuestions && Array.isArray(rawOptionsArray)) {
+        if (type === 'group-tf' && !subQuestions && rawOptionsArray && Array.isArray(rawOptionsArray)) {
             subQuestions = rawOptionsArray;
         }
 
         if (Array.isArray(subQuestions)) {
             subQuestions = subQuestions.map((sq: any) => {
-                let ans = sq.correctAnswer ?? sq.answer ?? sq.dap_an ?? sq.isTrue ?? sq.isCorrect ?? sq.correct;
+                let ans = sq.correctAnswer ?? sq.answer ?? sq.dap_an ?? sq.isTrue ?? sq.isCorrect ?? sq.correct ?? sq.correct_answer;
                 if (ans === true || ans === 'True' || ans === 'true' || ans === 'Đ' || ans === 'Đúng' || ans === '1') {
                     ans = 'True';
                 } else {
                     ans = 'False';
                 }
-                const sqText = sq.text || sq.content || sq.noi_dung || '';
+                const sqText = sq.text || sq.content || sq.noi_dung || sq.question || '';
                 return {
                     text: sqText.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$'),
                     correctAnswer: ans
@@ -341,24 +377,29 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
             });
         }
 
-        let rawCorrectVal = q.correctAnswer ?? q.answer ?? q.correct ?? q.dap_an_dung ?? q.dap_an ?? q.correctOptionIndex ?? q.correct_option_index ?? q.correctIndex ?? q.correct_index ?? q.answerIndex;
+        let rawCorrectVal = q.correct_answer ?? q.correctAnswer ?? q.answer ?? q.correct ?? q.dap_an_dung ?? q.dap_an ?? q.correctOptionIndex ?? q.correct_option_index ?? q.correctIndex ?? q.correct_index ?? q.answerIndex;
 
         let options: string[] | undefined = undefined;
         let correctAnswer = '';
 
-        if (type === 'mcq' && Array.isArray(rawOptionsArray)) {
+        if (type === 'mcq' && rawOptionsArray) {
             options = rawOptionsArray.map((opt: any) => {
                 const str = typeof opt === 'string' ? opt : (opt.text || opt.content || opt.label || String(opt));
                 return str.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$');
             });
 
-            // Tìm đáp án đúng nếu nằm trong thuộc tính isCorrect của option object
+            // 1. Tìm trong thuộc tính isCorrect của option object
             const correctObj = rawOptionsArray.find((opt: any) => typeof opt === 'object' && (opt.isCorrect === true || opt.is_correct === true || opt.correct === true));
             if (correctObj) {
                 const str = typeof correctObj === 'string' ? correctObj : (correctObj.text || correctObj.content || correctObj.label || String(correctObj));
                 correctAnswer = str.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$');
             } else if (rawCorrectVal !== undefined && rawCorrectVal !== null && rawCorrectVal !== '') {
-                if (typeof rawCorrectVal === 'number') {
+                // 2. Nếu optionsObj dạng { "A": "...", "B": "..." } và rawCorrectVal = "A" hay "D"
+                if (optionsObj && typeof rawCorrectVal === 'string' && optionsObj[rawCorrectVal.trim()] !== undefined) {
+                    const matchedVal = optionsObj[rawCorrectVal.trim()];
+                    const str = typeof matchedVal === 'string' ? matchedVal : (matchedVal.text || matchedVal.content || String(matchedVal));
+                    correctAnswer = str.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$');
+                } else if (typeof rawCorrectVal === 'number') {
                     if (rawCorrectVal >= 0 && rawCorrectVal < options.length) {
                         correctAnswer = options[rawCorrectVal];
                     } else {
@@ -392,7 +433,17 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
             }
         }
 
-        const rawText = q.text || q.question || q.content || q.cau_hoi || q.title || '';
+        // Question text: hợp nhất context (ngữ cảnh/đoạn văn) + câu hỏi
+        let rawText = '';
+        const contextStr = q.context || q.doan_van || q.bai_doc || '';
+        const mainTextStr = q.text || q.question || q.content || q.cau_hoi || q.title || '';
+
+        if (contextStr && mainTextStr) {
+            rawText = `${contextStr}\n${mainTextStr}`;
+        } else {
+            rawText = mainTextStr || contextStr || '';
+        }
+
         const rawSolution = q.solution || q.explanation || q.loi_giai || q.huong_dan_giai || q.guide || '';
 
         return {
