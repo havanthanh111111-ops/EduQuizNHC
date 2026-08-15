@@ -2,6 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Question, Grade } from "../types";
 import { v4 as uuidv4 } from 'uuid';
+import { normalizeFullText } from './vietnameseFixer';
 
 const cleanJsonString = (str: string): string => {
     return str.replace(/```json/gi, "").replace(/```/gi, "").trim();
@@ -9,8 +10,9 @@ const cleanJsonString = (str: string): string => {
 
 const stripOptionLabel = (text: string): string => {
     if (!text) return "";
+    // Chuẩn hóa dấu tiếng Việt và LaTeX trước
+    let cleaned = normalizeFullText(text.trim());
     // Xử lý đệ quy để xóa nhiều lớp nhãn (VD: "A. A. Nội dung")
-    let cleaned = text.trim();
     const labelRegex = /^(\*?[A-Za-z0-9][\.\)\/\-:\s]\s*)/g;
     
     while (labelRegex.test(cleaned)) {
