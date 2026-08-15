@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Download, FileType, AlignLeft, Rows } from 'lucide-react';
 import { Quiz, Question } from '../../types';
 import LatexText from '../LatexText';
+import { normalizeFullText, repairVietnameseText } from '../../services/vietnameseFixer';
 
 interface QuizPreviewModalProps {
     quiz: Quiz;
@@ -44,15 +45,15 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
         const maxLen = Math.max(...options.map(o => (o || '').length));
         const totalLen = options.reduce((sum, o) => sum + (o || '').length, 0);
 
-        if (options.length === 4 && maxLen <= 18 && totalLen <= 70) {
-            // 4 phương án trên 1 dòng
+        if (options.length === 4 && maxLen <= 20 && totalLen <= 75) {
+            // 4 phương án trên 1 dòng dàn đều dạng cột (tương đương canh Tab Word)
             return (
                 <div className="options-container" style={{ marginTop: '2pt', marginBottom: '4pt' }}>
                     <p 
                         className="option-item" 
                         style={{ 
                             margin: '2pt 0 2pt 18pt', 
-                            lineHeight: '1.3', 
+                            lineHeight: '1.35', 
                             textAlign: 'justify' 
                         }}
                     >
@@ -60,8 +61,9 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                             <span 
                                 key={idx} 
                                 style={{ 
-                                    marginRight: idx < 3 ? '24pt' : '0', 
-                                    display: 'inline-block' 
+                                    width: '24.5%', 
+                                    display: 'inline-block', 
+                                    verticalAlign: 'top' 
                                 }}
                             >
                                 <b style={{ marginRight: '4px' }}>{String.fromCharCode(65 + idx)}.</b>
@@ -73,23 +75,23 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
             );
         }
 
-        if (options.length === 4 && maxLen <= 40) {
-            // 2 dòng (A-B và C-D)
+        if (options.length === 4 && maxLen <= 45) {
+            // 2 dòng chia đều 2 cột (A - B và C - D) như canh Tab Word
             return (
                 <div className="options-container" style={{ marginTop: '2pt', marginBottom: '4pt' }}>
                     <p 
                         className="option-item" 
                         style={{ 
-                            margin: '2pt 0 1pt 18pt', 
-                            lineHeight: '1.3', 
+                            margin: '2pt 0 1.5pt 18pt', 
+                            lineHeight: '1.35', 
                             textAlign: 'justify' 
                         }}
                     >
-                        <span style={{ marginRight: '36pt', display: 'inline-block' }}>
+                        <span style={{ width: '49%', display: 'inline-block', verticalAlign: 'top' }}>
                             <b style={{ marginRight: '4px' }}>A.</b>
                             <LatexText text={options[0]} />
                         </span>
-                        <span style={{ display: 'inline-block' }}>
+                        <span style={{ width: '49%', display: 'inline-block', verticalAlign: 'top' }}>
                             <b style={{ marginRight: '4px' }}>B.</b>
                             <LatexText text={options[1]} />
                         </span>
@@ -97,16 +99,16 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                     <p 
                         className="option-item" 
                         style={{ 
-                            margin: '1pt 0 2pt 18pt', 
-                            lineHeight: '1.3', 
+                            margin: '1.5pt 0 2pt 18pt', 
+                            lineHeight: '1.35', 
                             textAlign: 'justify' 
                         }}
                     >
-                        <span style={{ marginRight: '36pt', display: 'inline-block' }}>
+                        <span style={{ width: '49%', display: 'inline-block', verticalAlign: 'top' }}>
                             <b style={{ marginRight: '4px' }}>C.</b>
                             <LatexText text={options[2]} />
                         </span>
-                        <span style={{ display: 'inline-block' }}>
+                        <span style={{ width: '49%', display: 'inline-block', verticalAlign: 'top' }}>
                             <b style={{ marginRight: '4px' }}>D.</b>
                             <LatexText text={options[3]} />
                         </span>
@@ -124,7 +126,7 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                         className="option-item" 
                         style={{ 
                             margin: '2pt 0 2pt 18pt', 
-                            lineHeight: '1.3', 
+                            lineHeight: '1.35', 
                             textAlign: 'justify' 
                         }}
                     >
@@ -273,14 +275,16 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
             }
         });
 
-        const content = clone.innerHTML;
+        // Chuẩn hóa toàn bộ nội dung HTML xuất ra để đảm bảo không bị lỗi font hay vỡ chữ
+        const cleanedHtml = repairVietnameseText(clone.innerHTML);
+        const content = cleanedHtml;
         const header = `
             <html xmlns:o='urn:schemas-microsoft-com:office:office' 
                   xmlns:w='urn:schemas-microsoft-com:office:word' 
                   xmlns='http://www.w3.org/TR/REC-html40'>
             <head>
                 <meta charset='utf-8'>
-                <title>${quiz.title}</title>
+                <title>${normalizeFullText(quiz.title)}</title>
                 <!--[if gte mso 9]>
                 <xml>
                 <w:WordDocument>
@@ -451,8 +455,16 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                 <div className="flex-1 overflow-y-auto p-6 md:p-12 bg-white custom-scrollbar">
                     <div 
                         id="quiz-export-content" 
-                        className="max-w-4xl mx-auto space-y-8 pb-20 font-serif" 
-                        style={{ textAlign: 'justify', color: '#1a1a1a', lineHeight: '1.3' }}
+                        className="max-w-4xl mx-auto space-y-8 pb-20 bg-white p-4 md:p-8 rounded-lg shadow-sm border border-slate-100" 
+                        style={{ 
+                            fontFamily: "'Times New Roman', Times, 'Liberation Serif', serif",
+                            fontSize: '12pt',
+                            textAlign: 'justify', 
+                            color: '#000000', 
+                            lineHeight: '1.35',
+                            letterSpacing: 'normal',
+                            wordSpacing: 'normal'
+                        }}
                     >
                         {/* Header đề thi */}
                         <div className="mb-6" style={{ textAlign: 'left' }}>
@@ -473,7 +485,9 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                             <div style={{ border: '1pt solid black', padding: '6pt 10pt', marginTop: '8pt', textAlign: 'left' }}>
                                 <p style={{ fontWeight: 'bold', margin: 0, fontSize: '10.5pt' }}>Họ và tên: .......................................................................... SBD: .....................................</p>
                             </div>
-                            <h2 style={{ textAlign: 'center', fontWeight: 'bold', fontSize: '14pt', marginTop: '16pt', marginBottom: '8pt', textTransform: 'uppercase' }}>{quiz.title}</h2>
+                            <h2 style={{ textAlign: 'center', fontWeight: 'bold', fontSize: '14pt', marginTop: '16pt', marginBottom: '8pt', textTransform: 'uppercase' }}>
+                                <LatexText text={quiz.title} />
+                            </h2>
                         </div>
 
                         {/* Các phần thi */}
@@ -526,6 +540,7 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                                                             fontWeight: 'bold', 
                                                             fontStyle: 'italic', 
                                                             textDecoration: 'underline', 
+                                                            textUnderlineOffset: '3px',
                                                             marginRight: '6px' 
                                                         }}
                                                     >
