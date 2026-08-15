@@ -11,6 +11,7 @@ import {
   syncQuizzesToBank
 } from '../../services/storage';
 import { generateQuizFromPrompt, parseQuestionsFromPDF, parseQuestionsFromText } from '../../services/gemini';
+import { normalizeFullText } from '../../services/vietnameseFixer';
 import { Quiz, User, Result, Chapter, Question, QuestionType, Grade, QuizType, Role } from '../../types';
 import { v4 as uuidv4 } from 'uuid';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
@@ -458,7 +459,7 @@ export default function AdminDashboard() {
   const handleCleanLabels = () => {
     const stripLabel = (text: string): string => {
         if (!text) return "";
-        let cleaned = text.trim();
+        let cleaned = normalizeFullText(text.trim());
         const labelRegex = /^(\*?[A-Za-z0-9][\.\)\/\-:\s]\s*)/g;
         while (labelRegex.test(cleaned)) {
             cleaned = cleaned.replace(labelRegex, "").trim();
@@ -469,6 +470,7 @@ export default function AdminDashboard() {
     const cleanedQuestions = questions.map(q => {
         const newQ = { ...q };
         newQ.text = stripLabel(q.text);
+        if (q.solution) newQ.solution = normalizeFullText(q.solution);
         
         if (q.options) {
             newQ.options = q.options.map(opt => stripLabel(opt));
@@ -501,7 +503,7 @@ export default function AdminDashboard() {
     });
 
     setQuestions(cleanedQuestions);
-    showAlert("Thành công", "Đã dọn dẹp nhãn cho tất cả câu hỏi!", "success");
+    showAlert("Thành công", "Đã chuẩn hóa dấu tiếng Việt, sửa lỗi vỡ chữ và dọn dẹp nhãn cho toàn bộ câu hỏi!", "success");
   };
 
   const handleImportCsv = async (e: React.ChangeEvent<HTMLInputElement>) => {
