@@ -75,12 +75,18 @@ export default function AdminDashboard() {
         setResults(r);
         setClasses(cls);
       } else if (tab === 'classes') {
-        const [cls, u] = await Promise.all([
+        const [cls, u, q, r, c] = await Promise.all([
           getClasses(),
-          getUsers()
+          getUsers(),
+          getQuizzesMetadata(),
+          getResultsMetadata(),
+          getChapters()
         ]);
         setClasses(cls);
         setStudents(u.filter(user => user.role === 'student'));
+        setQuizzes(q);
+        setResults(r);
+        setChapters(c);
       } else if (tab === 'students') {
         const [paged, r, q, cls] = await Promise.all([
           getUsersPage(1, 50),
@@ -956,6 +962,9 @@ export default function AdminDashboard() {
             <ClassManager 
               classes={classes}
               students={students}
+              quizzes={quizzes}
+              results={results}
+              chapters={chapters}
               onSaveClass={async (c) => {
                 await saveClass(c);
                 await loadTabData('classes');
