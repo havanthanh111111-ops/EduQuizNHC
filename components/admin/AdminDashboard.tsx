@@ -380,16 +380,27 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleSyncBank = async () => {
-    if (!confirm("Hệ thống sẽ quét toàn bộ câu hỏi trong tất cả đề thi, tự động nhận diện khử trùng lặp và đồng bộ vào kho Ngân hàng. Tiếp tục?")) return;
+  const handleSyncBank = async (forceAll: boolean = false) => {
+    const confirmMsg = forceAll 
+      ? "Hệ thống sẽ quét lại TOÀN BỘ đề thi (bất kể đã đồng bộ hay chưa) và đối chiếu khử trùng lặp vào Ngân hàng. Tiếp tục?" 
+      : "Hệ thống sẽ quét các đề thi MỚI CHƯA ĐỒNG BỘ, tự động khử trùng lặp và đẩy vào Ngân hàng câu hỏi. Tiếp tục?";
+    if (!confirm(confirmMsg)) return;
     setIsSyncing(true);
     try {
-      const stats = await syncQuizzesToBank();
-      showAlert(
-        "Đồng bộ Ngân hàng thành công",
-        `Tổng quét: ${stats.total} câu hỏi.\n• Thêm mới: ${stats.added} câu\n• Cập nhật thông tin: ${stats.updated} câu\n• Đã có sẵn (bỏ qua trùng lặp): ${stats.skipped} câu`,
-        "success"
-      );
+      const stats = await syncQuizzesToBank(forceAll);
+      if (stats.syncedQuizzesCount === 0) {
+        showAlert(
+          "Dữ liệu đã cập nhật",
+          `Tất cả đề thi (${stats.totalQuizzes} đề) đều đã được đồng bộ vào Ngân hàng từ trước. Không có đề thi mới nào cần quét.`,
+          "info"
+        );
+      } else {
+        showAlert(
+          "Đồng bộ Ngân hàng thành công",
+          `Đã quét ${stats.syncedQuizzesCount} đề thi mới (${stats.total} câu hỏi):\n• Thêm mới vào Ngân hàng: ${stats.added} câu\n• Cập nhật thông tin: ${stats.updated} câu\n• Đã có sẵn (bỏ qua trùng lặp): ${stats.skipped} câu\n• Đã gắn cờ đồng bộ cho ${stats.syncedQuizzesCount} đề thi.`,
+          "success"
+        );
+      }
       loadTabData('bank');
     } catch (e) {
       showAlert("Lỗi đồng bộ", "Có lỗi xảy ra khi đồng bộ ngân hàng câu hỏi.", "error");
@@ -1084,7 +1095,7 @@ export default function AdminDashboard() {
                 <div className="flex justify-between items-center">
                    <h1 className="text-xl font-black text-slate-800 uppercase italic">NGÂN HÀNG CÂU HỎI</h1>
                    <button 
-                      onClick={handleSyncBank} 
+                      onClick={() => handleSyncBank(false)} 
                       disabled={isSyncing}
                       className="flex items-center gap-2 px-5 py-3 bg-white border-2 border-slate-200 text-blue-600 rounded-xl font-black uppercase text-[10px] shadow-sm hover:bg-blue-50 transition-all disabled:opacity-50"
                    >
