@@ -486,7 +486,11 @@ export const getQuizById = async (id: string): Promise<Quiz | null> => {
 
 export const saveQuiz = async (quiz: Quiz): Promise<void> => {
   if (!supabase) throw new Error("Mất kết nối Database");
-  const enrichedQuiz = { ...quiz, questionCount: quiz.questions.length };
+  const enrichedQuiz = { 
+    ...quiz, 
+    questionCount: quiz.questions.length,
+    isSyncedToBank: quiz.isSyncedToBank ?? false 
+  };
   const { error } = await supabase.from('quizzes').insert({ id: quiz.id, grade: quiz.grade, data: enrichedQuiz });
   handleSupabaseError(error, "Lưu đề thi mới");
 };
@@ -717,10 +721,35 @@ export const getQuestionFingerprint = (q: Question): string => {
     return `${type}:::${text}:::${optionsKey}:::${subKey}`;
 };
 
-export const syncQuizzesToBank = async (): Promise<{ total: number, added: number, skipped: number, updated: number }> => {
-    if (!supabase) return { total: 0, added: 0, skipped: 0, updated: 0 };
+export const syncQuizzesToBank = async (forceAll: boolean = false): Promise<{ 
+    total: number, 
+    added: number, 
+    skipped: number, 
+    updated: number, 
+    syncedQuizzesCount: number,
+    totalQuizzes: number 
+}> => {
+    if (!supabase) return { total: 0, added: 0, skipped: 0, updated: 0, syncedQuizzesCount: 0, totalQuizzes: 0 };
     try {
-        // 1. Lấy tất cả câu hỏi hiện có trong kho ngân hàng
+        // 1. Lấy tất cả đề thi từ database
+        const { data: quizRows, error: quizError } = await supabase.from('quizzes').select('id, grade, data');
+        if (quizError || !quizRows) return { total: 0, added: 0, skipped: 0, updated: 0, syncedQuizzesCount: 0, totalQuizzes: 0 };
+
+        const totalQuizzes = quizRows.length;
+        
+        // Lọc ra các đề chưa được gắn cờ đồng bộ (nếu forceAll = true thì quét toàn bộ)
+        const pendingQuizRows = forceAll 
+            ? quizRows 
+            : quizRows.filter((r: any) => {
+                const qz = r.data as Quiz;
+                return !qz.isSyncedToBank;
+            });
+
+        if (pendingQuizRows.length === 0) {
+            return { total: 0, added: 0, skipped: 0, updated: 0, syncedQuizzesCount: 0, totalQuizzes };
+        }
+
+        // 2. Lấy tất cả câu hỏi hiện có trong kho ngân hàng để đối chiếu
         const existingBankQuestions = await getBankQuestions();
         const existingIdSet = new Set<string>();
         const existingFingerprintMap = new Map<string, Question>();
@@ -732,10 +761,6 @@ export const syncQuizzesToBank = async (): Promise<{ total: number, added: numbe
             existingFingerprintMap.set(fp, bq);
         });
 
-        // 2. Lấy toàn bộ câu hỏi từ tất cả các đề thi
-        const { data: quizData } = await supabase.from('quizzes').select('data');
-        if (!quizData) return { total: 0, added: 0, skipped: 0, updated: 0 };
-
         const questionsToSave: Question[] = [];
         let totalScanned = 0;
         let skippedCount = 0;
@@ -744,7 +769,7 @@ export const syncQuizzesToBank = async (): Promise<{ total: number, added: numbe
 
         const currentBatchFingerprints = new Set<string>();
 
-        quizData.forEach((row: any) => {
+        for (const row of pendingQuizRows) {
             const quiz = row.data as Quiz;
             if (quiz.questions && Array.isArray(quiz.questions)) {
                 quiz.questions.forEach(q => {
@@ -801,24 +826,44 @@ export const syncQuizzesToBank = async (): Promise<{ total: number, added: numbe
                     }
                 });
             }
-        });
-
-        if (questionsToSave.length === 0) {
-            return { total: totalScanned, added: 0, skipped: skippedCount, updated: updatedCount };
         }
 
-        // Lưu theo từng chunk 50 câu
-        const chunkSize = 50;
-        for (let i = 0; i < questionsToSave.length; i += chunkSize) {
-            const chunk = questionsToSave.slice(i, i + chunkSize);
-            const payload = chunk.map(q => ({ id: q.id, data: q }));
-            await supabase.from('bank_questions').upsert(payload);
+        // 3. Lưu câu hỏi mới/cập nhật vào bank_questions
+        if (questionsToSave.length > 0) {
+            const chunkSize = 50;
+            for (let i = 0; i < questionsToSave.length; i += chunkSize) {
+                const chunk = questionsToSave.slice(i, i + chunkSize);
+                const payload = chunk.map(q => ({ id: q.id, data: q }));
+                await supabase.from('bank_questions').upsert(payload);
+            }
         }
 
-        return { total: totalScanned, added: addedCount, skipped: skippedCount, updated: updatedCount };
+        // 4. Gắn cờ isSyncedToBank: true cho các đề thi vừa được quét xong
+        const nowIso = new Date().toISOString();
+        for (const row of pendingQuizRows) {
+            const quiz = row.data as Quiz;
+            const updatedQuiz: Quiz = {
+                ...quiz,
+                isSyncedToBank: true,
+                syncedToBankAt: nowIso
+            };
+            await supabase.from('quizzes').update({
+                data: updatedQuiz,
+                grade: row.grade || quiz.grade
+            }).eq('id', row.id);
+        }
+
+        return { 
+            total: totalScanned, 
+            added: addedCount, 
+            skipped: skippedCount, 
+            updated: updatedCount, 
+            syncedQuizzesCount: pendingQuizRows.length,
+            totalQuizzes 
+        };
     } catch (e) {
         console.error("Lỗi đồng bộ về Ngân hàng:", e);
-        return { total: 0, added: 0, skipped: 0, updated: 0 };
+        return { total: 0, added: 0, skipped: 0, updated: 0, syncedQuizzesCount: 0, totalQuizzes: 0 };
     }
 };
 
