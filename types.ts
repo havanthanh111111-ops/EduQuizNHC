@@ -45,6 +45,7 @@ export interface SubQuestion {
 
 export interface Question {
   id: string;
+  bankOriginId?: string; // ID gốc của câu hỏi trong Ngân hàng (nếu được lấy từ Ngân hàng)
   type: QuestionType;
   text: string;
   points: number | string;
