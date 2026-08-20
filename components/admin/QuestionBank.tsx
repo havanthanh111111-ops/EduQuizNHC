@@ -82,7 +82,11 @@ export default function QuestionBank({
     const handleAddSelected = () => {
         const selectedQuestions = filteredQuestions
             .filter(q => selectedIds.has(q.id))
-            .map(q => ({ ...q, id: uuidv4() }));
+            .map(q => ({ 
+                ...q, 
+                id: uuidv4(),
+                bankOriginId: q.bankOriginId || q.id // Lưu vết ID gốc trong Ngân hàng
+            }));
         if (selectedQuestions.length === 0) return alert("Vui lòng chọn ít nhất một câu hỏi!");
         onAddMultiple(selectedQuestions);
         setSelectedIds(new Set());
