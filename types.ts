@@ -77,6 +77,8 @@ export interface Quiz {
   isPublished: boolean;
   isMonitored?: boolean;
   isUnlisted?: boolean; 
+  isSyncedToBank?: boolean; // Cờ đánh dấu đề thi đã được quét và đồng bộ vào Ngân hàng câu hỏi
+  syncedToBankAt?: string; // Thời điểm đồng bộ vào Ngân hàng
   orderIndex?: number; // Thứ tự trong chương
   // Phân quyền giao đề theo Lớp học & Niên khóa
   targetType?: 'all' | 'classes'; // 'all' (tất cả hs cùng khối) | 'classes' (chỉ giao cho các lớp chỉ định)
