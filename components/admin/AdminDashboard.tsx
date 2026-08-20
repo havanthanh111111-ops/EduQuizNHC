@@ -282,6 +282,26 @@ export default function AdminDashboard() {
   const [selectedResultDetail, setSelectedResultDetail] = useState<{ result: Result, quiz: Quiz } | null>(null);
   const [previewQuiz, setPreviewQuiz] = useState<Quiz | null>(null);
   const [isBankOpen, setIsBankOpen] = useState(false);
+  const [isBankLoading, setIsBankLoading] = useState(false);
+
+  const loadBankDataIfNeeded = useCallback(async () => {
+    if (!isDatabaseConnected()) return;
+    if (bankQuestions.length === 0) {
+      setIsBankLoading(true);
+      try {
+        const [b, c] = await Promise.all([
+          getBankQuestions(),
+          getChapters()
+        ]);
+        setBankQuestions(b);
+        if (c && c.length > 0) setChapters(c);
+      } catch (e) {
+        console.error("Lỗi tải ngân hàng câu hỏi:", e);
+      } finally {
+        setIsBankLoading(false);
+      }
+    }
+  }, [bankQuestions.length]);
 
   const allAvailableQuestions = useMemo(() => {
     return bankQuestions;
@@ -361,14 +381,18 @@ export default function AdminDashboard() {
   };
 
   const handleSyncBank = async () => {
-    if (!confirm("Hệ thống sẽ quét toàn bộ câu hỏi trong tất cả đề thi và đẩy vào kho tổng (Bank). Tiếp tục?")) return;
+    if (!confirm("Hệ thống sẽ quét toàn bộ câu hỏi trong tất cả đề thi, tự động nhận diện khử trùng lặp và đồng bộ vào kho Ngân hàng. Tiếp tục?")) return;
     setIsSyncing(true);
     try {
       const stats = await syncQuizzesToBank();
-      alert(`Đã hoàn tất! Quét được ${stats.total} câu hỏi, đã đồng bộ thành công ${stats.added} câu vào Ngân hàng.`);
+      showAlert(
+        "Đồng bộ Ngân hàng thành công",
+        `Tổng quét: ${stats.total} câu hỏi.\n• Thêm mới: ${stats.added} câu\n• Cập nhật thông tin: ${stats.updated} câu\n• Đã có sẵn (bỏ qua trùng lặp): ${stats.skipped} câu`,
+        "success"
+      );
       loadTabData('bank');
     } catch (e) {
-      alert("Lỗi khi đồng bộ Ngân hàng.");
+      showAlert("Lỗi đồng bộ", "Có lỗi xảy ra khi đồng bộ ngân hàng câu hỏi.", "error");
     } finally {
       setIsSyncing(false);
     }
@@ -921,6 +945,7 @@ export default function AdminDashboard() {
                     onOpenBank={(type) => { 
                         setBTypeFilter(type); 
                         setBGradeFilter(quizGrade); 
+                        loadBankDataIfNeeded();
                         setIsBankOpen(true); 
                     }}
                     onPdfExtract={handlePdfExtract} onTextExtract={handleTextExtract} onUploadImage={handleUploadImage} uploadingId={uploadingId} isAiLoading={isAiLoading}
@@ -1114,15 +1139,22 @@ export default function AdminDashboard() {
                     </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-4 bg-slate-50 custom-scrollbar">
-                    <QuestionBank 
-                        questions={allAvailableQuestions} 
-                        chapters={chapters}
-                        bGradeFilter={bGradeFilter} setBGradeFilter={setBGradeFilter}
-                        bChapterFilter={bChapterFilter} setBChapterFilter={setBChapterFilter}
-                        bTypeFilter={bTypeFilter} setBTypeFilter={setBTypeFilter}
-                        bSearch={bSearch} setBSearch={setBSearch}
-                        onAddMultiple={(qs) => { setQuestions([...questions, ...qs]); setIsBankOpen(false); }}
-                    />
+                    {isBankLoading ? (
+                        <div className="py-20 text-center">
+                            <Loader2 className="animate-spin mx-auto text-blue-500" size={40}/>
+                            <p className="mt-4 text-[10px] font-black uppercase text-slate-400">Đang tải Ngân hàng câu hỏi từ Cloud...</p>
+                        </div>
+                    ) : (
+                        <QuestionBank 
+                            questions={allAvailableQuestions} 
+                            chapters={chapters}
+                            bGradeFilter={bGradeFilter} setBGradeFilter={setBGradeFilter}
+                            bChapterFilter={bChapterFilter} setBChapterFilter={setBChapterFilter}
+                            bTypeFilter={bTypeFilter} setBTypeFilter={setBTypeFilter}
+                            bSearch={bSearch} setBSearch={setBSearch}
+                            onAddMultiple={(qs) => { setQuestions([...questions, ...qs]); setIsBankOpen(false); }}
+                        />
+                    )}
                 </div>
              </div>
         </div>
