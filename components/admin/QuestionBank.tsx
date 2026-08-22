@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { Question, QuestionType, Grade, Chapter, QuestionLevel } from '../../types';
-import { Database, Search, CheckCircle2, CheckSquare, Square, X, BookOpen } from 'lucide-react';
+import { Database, Search, CheckCircle2, CheckSquare, Square, X, BookOpen, Bookmark } from 'lucide-react';
 import LatexText from '../LatexText';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -168,7 +168,17 @@ export default function QuestionBank({
                                             <BookOpen size={10}/> {bq.quizTitle}
                                         </span>
                                     )}
+                                    {bq.context && (
+                                        <span className="flex items-center gap-1 text-[8px] text-amber-700 font-black uppercase bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                            <Bookmark size={10}/> Có lời dẫn
+                                        </span>
+                                    )}
                                 </div>
+                                {bq.context && (
+                                    <div className="text-xs text-amber-800 italic bg-amber-50/50 p-2 rounded-lg border border-amber-100 mb-2 font-medium">
+                                        <LatexText text={bq.context}/>
+                                    </div>
+                                )}
                                 <div className="text-slate-800 text-sm font-bold leading-relaxed overflow-x-auto"><LatexText text={bq.text}/></div>
                                 {bq.type === 'group-tf' && bq.subQuestions && bq.subQuestions.some(sq => sq.level) && (
                                     <div className="flex flex-wrap gap-2 mt-2 pt-2 border-t border-slate-100">
