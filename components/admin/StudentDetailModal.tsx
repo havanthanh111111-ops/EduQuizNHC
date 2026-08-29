@@ -9,7 +9,7 @@ interface StudentDetailModalProps {
     results: Result[];
     quizzes: Quiz[];
     onClose: () => void;
-    onViewResult: (res: Result) => void;
+    onViewResult: (res: Result) => void | Promise<void>;
 }
 
 export default function StudentDetailModal({ student, results, quizzes, onClose, onViewResult }: StudentDetailModalProps) {
