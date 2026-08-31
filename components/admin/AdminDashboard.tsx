@@ -12,7 +12,10 @@ import {
   syncQuizzesToBank,
   updateQuizTarget,
   batchUpdateQuizTarget,
-  updateQuizAllowReview
+  updateQuizAllowReview,
+  getCurrentAcademicYear,
+  updateQuizAcademicYear,
+  batchUpdateQuizAcademicYear
 } from '../../services/storage';
 import { generateQuizFromPrompt, parseQuestionsFromPDF, parseQuestionsFromText } from '../../services/gemini';
 import { normalizeFullText } from '../../services/vietnameseFixer';
@@ -61,17 +64,17 @@ export default function AdminDashboard() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [bankQuestions, setBankQuestions] = useState<Question[]>([]);
 
-  // Lazy loading data
-  const loadTabData = useCallback(async (tab: AdminTab) => {
+  // Lazy loading data with memory cache & forceRefresh
+  const loadTabData = useCallback(async (tab: AdminTab, forceRefresh: boolean = false) => {
     if (!isDatabaseConnected()) return;
     setIsDataLoading(true);
     try {
       if (tab === 'quizzes') {
         const [q, c, r, cls] = await Promise.all([
-          getQuizzesMetadata(), 
-          getChapters(),
-          getResultsMetadata(),
-          getClasses()
+          getQuizzesMetadata('all', forceRefresh), 
+          getChapters(forceRefresh),
+          getResultsMetadata('all', 10000, forceRefresh),
+          getClasses(forceRefresh)
         ]);
         setQuizzes(q);
         setChapters(c);
@@ -79,11 +82,11 @@ export default function AdminDashboard() {
         setClasses(cls);
       } else if (tab === 'classes') {
         const [cls, u, q, r, c] = await Promise.all([
-          getClasses(),
-          getUsers(),
-          getQuizzesMetadata(),
-          getResultsMetadata(),
-          getChapters()
+          getClasses(forceRefresh),
+          getUsers(forceRefresh),
+          getQuizzesMetadata('all', forceRefresh),
+          getResultsMetadata('all', 10000, forceRefresh),
+          getChapters(forceRefresh)
         ]);
         setClasses(cls);
         setStudents(u.filter(user => user.role === 'student'));
@@ -93,9 +96,9 @@ export default function AdminDashboard() {
       } else if (tab === 'students') {
         const [paged, r, q, cls] = await Promise.all([
           getUsersPage(1, 50),
-          getResultsMetadata(),
-          getQuizzesMetadata(),
-          getClasses()
+          getResultsMetadata('all', 10000, forceRefresh),
+          getQuizzesMetadata('all', forceRefresh),
+          getClasses(forceRefresh)
         ]);
         
         setStudents(paged.data.filter(user => user.role === 'student'));
@@ -107,9 +110,9 @@ export default function AdminDashboard() {
       } else if (tab === 'results') {
         const [paged, q, u, cls] = await Promise.all([
           getResultsMetadataPage(1, 50),
-          getQuizzesMetadata(),
-          getUsers(),
-          getClasses()
+          getQuizzesMetadata('all', forceRefresh),
+          getUsers(forceRefresh),
+          getClasses(forceRefresh)
         ]);
         setResults(paged.data);
         setResultsTotal(paged.total);
@@ -119,13 +122,13 @@ export default function AdminDashboard() {
         setClasses(cls);
       } else if (tab === 'bank') {
         const [b, c] = await Promise.all([
-          getBankQuestions(),
-          getChapters()
+          getBankQuestions(forceRefresh),
+          getChapters(forceRefresh)
         ]);
         setBankQuestions(b);
         setChapters(c);
       } else if (tab === 'chapters') {
-        const c = await getChapters();
+        const c = await getChapters(forceRefresh);
         setChapters(c);
       }
     } catch (e) {
@@ -201,6 +204,7 @@ export default function AdminDashboard() {
   const [isEditingQuiz, setIsEditingQuiz] = useState(false);
   const [editingQuizId, setEditingQuizId] = useState<string | null>(null);
   const [quizTitle, setQuizTitle] = useState('');
+  const [quizAcademicYear, setQuizAcademicYear] = useState(() => getCurrentAcademicYear());
   const [quizGrade, setQuizGrade] = useState<Grade>('12');
   const [quizType, setQuizType] = useState<QuizType>('test');
   const [isPublished, setIsPublished] = useState(false);
@@ -221,6 +225,7 @@ export default function AdminDashboard() {
 
   // Filters
   const [qSearch, setQSearch] = useState('');
+  const [qAcademicYearFilter, setQAcademicYearFilter] = useState(() => getCurrentAcademicYear());
   const [qGradeFilter, setQGradeFilter] = useState<Grade | 'all'>('all');
   const [qChapterFilter, setQChapterFilter] = useState('all');
   const [sSearch, setSSearch] = useState('');
@@ -372,7 +377,8 @@ export default function AdminDashboard() {
 
   // Quiz Handlers
   const handleCreateQuiz = () => {
-    setEditingQuizId(null); setQuizTitle(''); setQuizGrade('12'); setQuizType('test');
+    const currentYear = getCurrentAcademicYear();
+    setEditingQuizId(null); setQuizTitle(''); setQuizGrade('12'); setQuizType('test'); setQuizAcademicYear(currentYear);
     setIsPublished(false); setIsMonitored(false); setIsUnlisted(false);
     setTargetType('all'); setAssignedClassIds([]); setMaxAttempts(2); setAllowReview(false);
     setDuration(45); setOrderIndex(1); setCategory('');
@@ -386,6 +392,7 @@ export default function AdminDashboard() {
         const fullQuiz = await getQuizById(quiz.id);
         if (fullQuiz) {
             setEditingQuizId(fullQuiz.id); setQuizTitle(fullQuiz.title); setQuizGrade(fullQuiz.grade);
+            setQuizAcademicYear(fullQuiz.academicYear || getCurrentAcademicYear());
             setQuizType(fullQuiz.type); setIsPublished(fullQuiz.isPublished); setIsMonitored(fullQuiz.isMonitored || false);
             setIsUnlisted(fullQuiz.isUnlisted || false);
             setTargetType(fullQuiz.targetType || 'all');
@@ -521,20 +528,32 @@ export default function AdminDashboard() {
     setIsSavingInProgress(true);
     const quiz: Quiz = {
       id: editingQuizId || uuidv4(), title: quizTitle, grade: quizGrade, type: quizType,
+      academicYear: quizAcademicYear || '2025-2026',
       isPublished, isMonitored, isUnlisted, durationMinutes: duration, orderIndex, category, startTime, endTime,
       targetType, assignedClassIds, maxAttempts: maxAttempts || 2,
       allowReview: quizType === 'practice' ? true : allowReview,
-      questions, createdAt: new Date().toISOString(), description: ''
+      questions, createdAt: new Date().toISOString(), description: '',
+      questionCount: questions.length
     };
     
     try {
+      const metaQuiz: Quiz = { ...quiz, questions: [] };
       if (editingQuizId) {
           await updateQuiz(quiz);
+          // Cập nhật trực tiếp vào State React đảm bảo không trùng lặp ID
+          setQuizzes(prev => {
+            const exists = prev.some(q => q.id === quiz.id);
+            if (exists) {
+              return prev.map(q => q.id === quiz.id ? metaQuiz : q);
+            }
+            return [metaQuiz, ...prev];
+          });
       } else {
           await saveQuiz(quiz);
+          // Thêm trực tiếp đề mới vào State React (lọc bỏ nếu trùng id do cache/sync)
+          setQuizzes(prev => [metaQuiz, ...prev.filter(q => q.id !== quiz.id)]);
       }
       setIsEditingQuiz(false);
-      await loadTabData('quizzes');
       alert("Đã lưu đề thi thành công vào Database Cloud!");
     } catch (e: any) { 
       alert("Lỗi khi lưu đề thi: " + (e.message || "Không xác định"));
@@ -565,7 +584,8 @@ export default function AdminDashboard() {
         setIsDataLoading(true);
         try {
             await deleteQuiz(id); 
-            await loadTabData('quizzes');
+            // Xóa trực tiếp khỏi State React mà không cần re-fetch toàn bộ danh sách
+            setQuizzes(prev => prev.filter(q => q.id !== id));
             alert("Đã xóa đề thi thành công.");
         } catch (e: any) {
             alert("Lỗi khi xóa đề thi: " + (e.message || "Không xác định"));
@@ -596,6 +616,28 @@ export default function AdminDashboard() {
       alert(`Đã cập nhật phân quyền phòng/lớp cho ${quizIds.length} đề thi thành công!`);
     } catch (error: any) {
       alert("Lỗi khi cập nhật phân quyền: " + (error.message || "Không xác định"));
+    }
+  };
+
+  const handleQuickUpdateAcademicYear = async (quizIds: string[], newYear: string) => {
+    try {
+      if (quizIds.length === 1) {
+        await updateQuizAcademicYear(quizIds[0], newYear);
+      } else {
+        await batchUpdateQuizAcademicYear(quizIds, newYear);
+      }
+      setQuizzes(prev => prev.map(q => {
+        if (quizIds.includes(q.id)) {
+          return {
+            ...q,
+            academicYear: newYear
+          };
+        }
+        return q;
+      }));
+    } catch (error: any) {
+      alert("Lỗi khi cập nhật năm học: " + (error.message || "Không xác định"));
+      throw error;
     }
   };
 
@@ -1014,6 +1056,18 @@ export default function AdminDashboard() {
             </button>
           ))}
         </nav>
+        
+        <div className="p-2 lg:p-4 border-t border-white/10 mt-auto">
+          <button
+            onClick={() => loadTabData(activeTab, true)}
+            disabled={isDataLoading}
+            title="Tải lại toàn bộ dữ liệu mới nhất từ Cloud"
+            className="w-full flex items-center justify-center lg:justify-start gap-3 px-4 py-3 rounded-xl text-[10px] font-black uppercase text-slate-400 hover:text-white hover:bg-white/5 transition-all"
+          >
+            <RefreshCw size={18} className={isDataLoading ? "animate-spin text-blue-400" : ""} />
+            <span className="hidden lg:inline">Làm mới Cloud</span>
+          </button>
+        </div>
       </aside>
 
       <main 
@@ -1055,6 +1109,7 @@ export default function AdminDashboard() {
                 <QuizEditor
                     editingId={editingQuizId} title={quizTitle} setTitle={setQuizTitle}
                     grade={quizGrade} setGrade={setQuizGrade} quizType={quizType} setQuizType={setQuizType}
+                    academicYear={quizAcademicYear} setAcademicYear={setQuizAcademicYear}
                     isPublished={isPublished} setIsPublished={setIsPublished} isMonitored={isMonitored} setIsMonitored={setIsMonitored}
                     isUnlisted={isUnlisted} setIsUnlisted={setIsUnlisted}
                     targetType={targetType} setTargetType={setTargetType}
@@ -1102,6 +1157,8 @@ export default function AdminDashboard() {
                         onEdit={handleEditQuiz} onDelete={handleDeleteQuiz} onPreview={handlePreviewQuiz}
                         onQuickAssignTarget={handleQuickAssignTarget}
                         onToggleAllowReview={handleToggleAllowReview}
+                        onQuickUpdateAcademicYear={handleQuickUpdateAcademicYear}
+                        qAcademicYearFilter={qAcademicYearFilter} setQAcademicYearFilter={setQAcademicYearFilter}
                         qSearch={qSearch} setQSearch={setQSearch} qGradeFilter={qGradeFilter} setQGradeFilter={setQGradeFilter}
                         qChapterFilter={qChapterFilter} setQChapterFilter={setQChapterFilter}
                     />
