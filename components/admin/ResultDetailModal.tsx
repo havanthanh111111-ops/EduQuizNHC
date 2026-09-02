@@ -3,6 +3,7 @@ import React, { useMemo } from 'react';
 import { X, CheckCircle2, XCircle, HelpCircle, Info, Lock, Bookmark } from 'lucide-react';
 import { Result, Quiz, Question } from '../../types';
 import LatexText from '../LatexText';
+import { restoreQuestionsOrder } from '../../services/quizShuffler';
 import { isAfter, addMinutes } from 'date-fns';
 
 interface ResultDetailModalProps {
@@ -26,15 +27,10 @@ export default function ResultDetailModal({ isOpen, result, quiz, onClose }: Res
     // Cho phép xem đáp án nếu là bài Luyện tập HOẶC bài Kiểm tra được giáo viên bật quyền xem
     const showDetailAnswers = quiz.type === 'practice' || (quiz.allowReview !== undefined ? quiz.allowReview : isEnded);
 
-    // Sắp xếp câu hỏi theo thứ tự Phần I, II, III giống lúc làm bài
+    // Khôi phục chính xác thứ tự câu hỏi đã xáo trộn riêng cho lượt làm bài này của học sinh
     const orderedQuestions = useMemo(() => {
-        const parts = {
-            mcq: quiz.questions.filter(q => q.type === 'mcq'),
-            'group-tf': quiz.questions.filter(q => q.type === 'group-tf'),
-            short: quiz.questions.filter(q => q.type === 'short')
-        };
-        return [...parts.mcq, ...parts['group-tf'], ...parts.short];
-    }, [quiz.questions]);
+        return restoreQuestionsOrder(quiz.questions, result.questionOrder);
+    }, [quiz.questions, result.questionOrder]);
 
     const renderQuestionDetail = (q: Question, idx: number) => {
         const ans = userAnswers[q.id];
