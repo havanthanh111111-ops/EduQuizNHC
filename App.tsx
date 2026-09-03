@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { AuthState, User } from './types';
-import { initStorage, findUserByStudentCode, isDatabaseConnected } from './services/storage';
+import { initStorage, findUser, findUserByStudentCode, isDatabaseConnected } from './services/storage';
+import { initGlobalKeyboardScroll } from './services/keyboardScroll';
 import Auth from './components/Auth';
 import AdminDashboard from './components/admin/AdminDashboard'; 
 import StudentDashboard from './components/StudentDashboard';
@@ -17,6 +18,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     initStorage();
+    const cleanupKeyboardScroll = initGlobalKeyboardScroll();
     
     // Kiểm tra link đề thi từ URL
     const urlParams = new URLSearchParams(window.location.search);
@@ -26,6 +28,10 @@ const App: React.FC = () => {
     }
     
     checkPersistentLogin();
+
+    return () => {
+      cleanupKeyboardScroll();
+    };
   }, []);
 
   const checkPersistentLogin = async () => {
@@ -34,17 +40,40 @@ const App: React.FC = () => {
       try {
         const parsedUser = JSON.parse(storedUser);
         
-        if (isDatabaseConnected() && parsedUser.studentCode) {
-            const dbUser = await findUserByStudentCode(parsedUser.studentCode);
+        if (isDatabaseConnected()) {
+          let dbUser: User | undefined;
+          if (parsedUser.studentCode) {
+            dbUser = await findUserByStudentCode(parsedUser.studentCode);
             if (!dbUser) {
-                handleLogout();
-                setIsChecking(false);
-                return;
+              handleLogout();
+              setIsChecking(false);
+              return;
+            }
+          } else if (parsedUser.username) {
+            dbUser = await findUser(parsedUser.username);
+          }
+
+          if (dbUser) {
+            const lowerName = (dbUser.username || '').toLowerCase().trim();
+            if ((lowerName === 'admin' || lowerName === 'superadmin') && dbUser.role !== 'superadmin') {
+              dbUser = { ...dbUser, role: 'superadmin' };
             }
             setAuth({ user: dbUser, isAuthenticated: true });
             localStorage.setItem('eduquiz_current_user', JSON.stringify(dbUser));
-        } else {
+          } else {
+            const lowerName = (parsedUser.username || '').toLowerCase().trim();
+            if ((lowerName === 'admin' || lowerName === 'superadmin') && parsedUser.role !== 'superadmin') {
+              parsedUser.role = 'superadmin';
+            }
             setAuth({ user: parsedUser, isAuthenticated: true });
+            localStorage.setItem('eduquiz_current_user', JSON.stringify(parsedUser));
+          }
+        } else {
+          const lowerName = (parsedUser.username || '').toLowerCase().trim();
+          if ((lowerName === 'admin' || lowerName === 'superadmin') && parsedUser.role !== 'superadmin') {
+            parsedUser.role = 'superadmin';
+          }
+          setAuth({ user: parsedUser, isAuthenticated: true });
         }
       } catch (e) {
         handleLogout();
@@ -81,8 +110,8 @@ const App: React.FC = () => {
 
   return (
     <Layout user={auth.user} onLogout={handleLogout}>
-      {auth.user.role === 'admin' ? (
-        <AdminDashboard />
+      {auth.user.role === 'admin' || auth.user.role === 'superadmin' ? (
+        <AdminDashboard currentUser={auth.user} />
       ) : (
         <StudentDashboard user={auth.user as User} targetQuizId={targetQuizId} />
       )}
