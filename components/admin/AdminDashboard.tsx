@@ -3,29 +3,30 @@ import {
   getQuizzesMetadata, getQuizById, deleteQuiz, saveQuiz, updateQuiz, uploadQuizImage,
   getUsers, saveUser, deleteUser, changePassword, getUsersPage, saveUsersBatch,
   getResultsMetadata, getResultById, deleteResult, getResultsMetadataPage,
-  getChapters, saveChapter, deleteChapter,
-  getBankQuestions, saveBankQuestion,
+  getChapters, saveChapter, deleteChapter, deleteChaptersBatch,
+  getBankQuestions, saveBankQuestion, deleteBankQuestion, deleteBatchBankQuestions,
   getClasses, saveClass, deleteClass, saveClassesBatch, assignStudentsToClass,
+  getTeachers, saveTeacher, deleteTeacher,
   clearLocalCache,
   isDatabaseConnected,
   syncAllQuizzesMetadata,
   syncQuizzesToBank,
-  updateQuizTarget,
-  batchUpdateQuizTarget,
-  updateQuizAllowReview,
-  getCurrentAcademicYear,
-  updateQuizAcademicYear,
-  batchUpdateQuizAcademicYear
+  deduplicateBankQuestions,
+  assignQuizToClasses
 } from '../../services/storage';
 import { generateQuizFromPrompt, parseQuestionsFromPDF, parseQuestionsFromText } from '../../services/gemini';
 import { normalizeFullText } from '../../services/vietnameseFixer';
+import { isSameSubject, STANDARD_SUBJECTS } from '../../services/subjectUtils';
+import { getCurrentAcademicYear, getQuizAcademicYear } from '../../services/academicUtils';
 import { Quiz, User, Result, Chapter, Question, QuestionType, Grade, QuizType, Role, ClassRoom } from '../../types';
 import { v4 as uuidv4 } from 'uuid';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Papa from 'papaparse';
 import { 
   LayoutDashboard, Users, BarChart3, ShieldAlert, Sparkles, FolderTree, 
-  Plus, Database, Loader2, X, RefreshCw, AlertTriangle, FileUp, DatabaseZap, GraduationCap
+  Plus, Database, Loader2, X, RefreshCw, AlertTriangle, FileUp, DatabaseZap, GraduationCap,
+  ShieldCheck, UserCheck, Key, Eye, EyeOff, Check, BookOpen, Server, HardDrive,
+  ChevronUp, ChevronDown
 } from 'lucide-react';
 
 import QuizList from './QuizList';
@@ -37,6 +38,8 @@ import ChapterManager from './ChapterManager';
 import QuestionBank from './QuestionBank';
 import AIRenderer from './AIRenderer';
 import ClassManager from './ClassManager';
+import TeacherManager from './TeacherManager';
+import DatabaseMonitor from './DatabaseMonitor';
 
 import StudentModal from './StudentModal';
 import StudentDetailModal from './StudentDetailModal';
@@ -44,9 +47,13 @@ import ResultHistoryModal from './ResultHistoryModal';
 import ResultDetailModal from './ResultDetailModal';
 import QuizPreviewModal from './QuizPreviewModal';
 
-type AdminTab = 'quizzes' | 'classes' | 'students' | 'results' | 'monitor' | 'chapters' | 'bank' | 'ai';
+type AdminTab = 'quizzes' | 'teachers' | 'classes' | 'students' | 'results' | 'monitor' | 'chapters' | 'bank' | 'ai' | 'database';
 
-export default function AdminDashboard() {
+interface AdminDashboardProps {
+  currentUser?: User;
+}
+
+export default function AdminDashboard({ currentUser }: AdminDashboardProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>('quizzes');
   const [isDataLoading, setIsDataLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -54,6 +61,7 @@ export default function AdminDashboard() {
 
   // Data states
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+  const [teachers, setTeachers] = useState<User[]>([]);
   const [classes, setClasses] = useState<ClassRoom[]>([]);
   const [students, setStudents] = useState<User[]>([]);
   const [studentsTotal, setStudentsTotal] = useState(0);
@@ -64,62 +72,83 @@ export default function AdminDashboard() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [bankQuestions, setBankQuestions] = useState<Question[]>([]);
 
-  // Lazy loading data with memory cache & forceRefresh
+  const loadedTabsRef = useRef<Set<string>>(new Set());
+
+  // Lazy loading data with memory caching to protect Firebase Quota & prevent unnecessary UI repaints
   const loadTabData = useCallback(async (tab: AdminTab, forceRefresh: boolean = false) => {
     if (!isDatabaseConnected()) return;
-    setIsDataLoading(true);
+    
+    // Nếu tab đã được nạp dữ liệu trước đó và không yêu cầu forceRefresh thì không hiện spinner chặn UI
+    const isAlreadyLoaded = loadedTabsRef.current.has(tab);
+    if (!isAlreadyLoaded || forceRefresh) {
+      setIsDataLoading(true);
+    }
+
     try {
       if (tab === 'quizzes') {
-        const [q, c, r, cls] = await Promise.all([
-          getQuizzesMetadata('all', forceRefresh), 
+        const [q, c, cls, t] = await Promise.all([
+          getQuizzesMetadata(undefined, undefined, forceRefresh), 
           getChapters(forceRefresh),
-          getResultsMetadata('all', 10000, forceRefresh),
-          getClasses(forceRefresh)
-        ]);
-        setQuizzes(q);
-        setChapters(c);
-        setResults(r);
-        setClasses(cls);
-      } else if (tab === 'classes') {
-        const [cls, u, q, r, c] = await Promise.all([
           getClasses(forceRefresh),
-          getUsers(forceRefresh),
-          getQuizzesMetadata('all', forceRefresh),
-          getResultsMetadata('all', 10000, forceRefresh),
-          getChapters(forceRefresh)
+          getTeachers(forceRefresh)
+        ]);
+        setQuizzes(q);
+        setChapters(c);
+        setClasses(cls);
+        setTeachers(t);
+        loadedTabsRef.current.add('quizzes');
+      } else if (tab === 'teachers') {
+        const [t, q, cls] = await Promise.all([
+          getTeachers(forceRefresh),
+          getQuizzesMetadata(undefined, undefined, forceRefresh),
+          getClasses(forceRefresh)
+        ]);
+        setTeachers(t);
+        setQuizzes(q);
+        setClasses(cls);
+        loadedTabsRef.current.add('teachers');
+      } else if (tab === 'classes') {
+        const [cls, q, c, t] = await Promise.all([
+          getClasses(forceRefresh),
+          getQuizzesMetadata(undefined, undefined, forceRefresh),
+          getChapters(forceRefresh),
+          getTeachers(forceRefresh)
         ]);
         setClasses(cls);
-        setStudents(u.filter(user => user.role === 'student'));
         setQuizzes(q);
-        setResults(r);
         setChapters(c);
+        setTeachers(t);
+        loadedTabsRef.current.add('classes');
       } else if (tab === 'students') {
-        const [paged, r, q, cls] = await Promise.all([
-          getUsersPage(1, 50),
-          getResultsMetadata('all', 10000, forceRefresh),
-          getQuizzesMetadata('all', forceRefresh),
-          getClasses(forceRefresh)
+        const [pagedUsers, cls, t] = await Promise.all([
+          getUsersPage(1, 100),
+          getClasses(forceRefresh),
+          getTeachers(forceRefresh)
         ]);
         
-        setStudents(paged.data.filter(user => user.role === 'student'));
-        setStudentsTotal(paged.total);
+        const studentList = pagedUsers.data.filter(user => user.role === 'student');
+        setStudents(studentList);
+        setStudentsTotal(pagedUsers.total || studentList.length);
         setStudentsPage(1);
-        setResults(r);
-        setQuizzes(q);
         setClasses(cls);
+        setTeachers(t);
+        loadedTabsRef.current.add('students');
       } else if (tab === 'results') {
-        const [paged, q, u, cls] = await Promise.all([
+        const [paged, q, cls, t, c] = await Promise.all([
           getResultsMetadataPage(1, 50),
-          getQuizzesMetadata('all', forceRefresh),
-          getUsers(forceRefresh),
-          getClasses(forceRefresh)
+          getQuizzesMetadata(undefined, undefined, forceRefresh),
+          getClasses(forceRefresh),
+          getTeachers(forceRefresh),
+          getChapters(forceRefresh)
         ]);
         setResults(paged.data);
         setResultsTotal(paged.total);
         setResultsPage(1);
         setQuizzes(q);
-        setStudents(u.filter(user => user.role === 'student'));
         setClasses(cls);
+        setTeachers(t);
+        setChapters(c);
+        loadedTabsRef.current.add('results');
       } else if (tab === 'bank') {
         const [b, c] = await Promise.all([
           getBankQuestions(forceRefresh),
@@ -127,9 +156,11 @@ export default function AdminDashboard() {
         ]);
         setBankQuestions(b);
         setChapters(c);
+        loadedTabsRef.current.add('bank');
       } else if (tab === 'chapters') {
         const c = await getChapters(forceRefresh);
         setChapters(c);
+        loadedTabsRef.current.add('chapters');
       }
     } catch (e) {
       console.error("Lỗi tải dữ liệu tab:", tab, e);
@@ -139,81 +170,30 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
-    loadTabData(activeTab);
-  }, [activeTab]);
-
-  const mainScrollRef = useRef<HTMLElement | null>(null);
-
-  // Hỗ trợ cuộn phím Mũi tên lên/xuống, PageUp, PageDown, Space, Home, End khi click vào khoảng trống
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const active = document.activeElement;
-      const isInput = active && (
-        active.tagName === 'INPUT' ||
-        active.tagName === 'TEXTAREA' ||
-        active.tagName === 'SELECT' ||
-        (active as HTMLElement).isContentEditable
-      );
-
-      // Nếu người dùng đang gõ trong ô nhập liệu (input, textarea), để phím điều hướng con trỏ bình thường
-      if (isInput) return;
-
-      const scrollContainer = mainScrollRef.current;
-      if (!scrollContainer) return;
-
-      const SCROLL_STEP = 120; // Khoảng cách cuộn mượt mỗi lần bấm phím mũi tên
-      const PAGE_STEP = scrollContainer.clientHeight * 0.85;
-
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        scrollContainer.scrollBy({ top: SCROLL_STEP, behavior: 'smooth' });
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        scrollContainer.scrollBy({ top: -SCROLL_STEP, behavior: 'smooth' });
-      } else if (e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey)) {
-        e.preventDefault();
-        scrollContainer.scrollBy({ top: PAGE_STEP, behavior: 'smooth' });
-      } else if (e.key === 'PageUp' || (e.key === ' ' && e.shiftKey)) {
-        e.preventDefault();
-        scrollContainer.scrollBy({ top: -PAGE_STEP, behavior: 'smooth' });
-      } else if (e.key === 'Home') {
-        e.preventDefault();
-        scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
-      } else if (e.key === 'End') {
-        e.preventDefault();
-        scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: 'smooth' });
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown, { passive: false });
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  const handleMainClick = (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    const isInteractive = target.closest('input, textarea, select, button, a, [role="button"], [contenteditable="true"]');
-    if (!isInteractive) {
-      if (document.activeElement instanceof HTMLElement) {
-        document.activeElement.blur();
-      }
-      mainScrollRef.current?.focus();
+    // Chỉ nạp lại từ mạng nếu tab này chưa từng nạp dữ liệu
+    if (!loadedTabsRef.current.has(activeTab)) {
+      loadTabData(activeTab);
     }
-  };
+  }, [activeTab, loadTabData]);
 
   // Quiz Editing
   const [isEditingQuiz, setIsEditingQuiz] = useState(false);
   const [editingQuizId, setEditingQuizId] = useState<string | null>(null);
+  const [isFetchingQuizDetail, setIsFetchingQuizDetail] = useState(false);
   const [quizTitle, setQuizTitle] = useState('');
-  const [quizAcademicYear, setQuizAcademicYear] = useState(() => getCurrentAcademicYear());
   const [quizGrade, setQuizGrade] = useState<Grade>('12');
+  const [quizAcademicYear, setQuizAcademicYear] = useState<string>(getCurrentAcademicYear());
   const [quizType, setQuizType] = useState<QuizType>('test');
+  const [quizMaxAttempts, setQuizMaxAttempts] = useState<number>(1);
+  const [quizSubject, setQuizSubject] = useState<string>(() => currentUser?.subject || 'Toán');
+  const [mySubject, setMySubject] = useState<string>(() => currentUser?.subject || 'Toán');
   const [isPublished, setIsPublished] = useState(false);
   const [isMonitored, setIsMonitored] = useState(false);
+  const [showResultAnswers, setShowResultAnswers] = useState(true);
   const [isUnlisted, setIsUnlisted] = useState(false);
+  const [isSharedWithTeachers, setIsSharedWithTeachers] = useState(false);
   const [targetType, setTargetType] = useState<'all' | 'classes'>('all');
   const [assignedClassIds, setAssignedClassIds] = useState<string[]>([]);
-  const [maxAttempts, setMaxAttempts] = useState<number>(2);
-  const [allowReview, setAllowReview] = useState<boolean>(false);
   const [duration, setDuration] = useState(45);
   const [orderIndex, setOrderIndex] = useState(1);
   const [category, setCategory] = useState('');
@@ -223,9 +203,54 @@ export default function AdminDashboard() {
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
 
+  useEffect(() => {
+    if (currentUser?.subject) {
+      setMySubject(currentUser.subject);
+    }
+  }, [currentUser?.subject]);
+
+  const handleUpdateMySubject = async (newSubject: string) => {
+    setMySubject(newSubject);
+    setQuizSubject(newSubject);
+    if (currentUser) {
+      const updated = { ...currentUser, subject: newSubject };
+      try {
+        await saveUser(updated);
+        localStorage.setItem('eduquiz_current_user', JSON.stringify(updated));
+        showAlert("Cập nhật môn dạy", `Đã thiết lập môn giảng dạy thành "${newSubject}"!`, "success");
+      } catch (err: any) {
+        console.error("Lỗi cập nhật môn:", err);
+      }
+    }
+  };
+
+  const [customApiKey, setCustomApiKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem('eduquiz_gemini_api_key') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+
+  const handleApiKeyChange = (newKey: string) => {
+    setCustomApiKey(newKey);
+    try {
+      if (newKey.trim()) {
+        localStorage.setItem('eduquiz_gemini_api_key', newKey.trim());
+      } else {
+        localStorage.removeItem('eduquiz_gemini_api_key');
+      }
+    } catch (e) {
+      console.error("Lỗi lưu API Key vào LocalStorage:", e);
+    }
+  };
+
   // Filters
   const [qSearch, setQSearch] = useState('');
-  const [qAcademicYearFilter, setQAcademicYearFilter] = useState(() => getCurrentAcademicYear());
+  const [qAcademicYearFilter, setQAcademicYearFilter] = useState<string>(getCurrentAcademicYear());
+  const [qSubjectFilter, setQSubjectFilter] = useState<string>('all');
   const [qGradeFilter, setQGradeFilter] = useState<Grade | 'all'>('all');
   const [qChapterFilter, setQChapterFilter] = useState('all');
   const [sSearch, setSSearch] = useState('');
@@ -255,15 +280,22 @@ export default function AdminDashboard() {
     return () => clearTimeout(timer);
   }, [rQuizFilter, rSearch, activeTab]);
 
-  // Server-side filtering for students
+  // Client/Server search for students
   useEffect(() => {
     const timer = setTimeout(async () => {
       if (activeTab === 'students' && isDatabaseConnected()) {
         setIsDataLoading(true);
         try {
-          const paged = await getUsersPage(1, 50, sSearch);
-          setStudents(paged.data.filter(u => u.role === 'student'));
-          setStudentsTotal(paged.total);
+          if (!sSearch) {
+            const allUsers = await getUsers();
+            const stus = allUsers.filter(u => u.role === 'student');
+            setStudents(stus);
+            setStudentsTotal(stus.length);
+          } else {
+            const paged = await getUsersPage(1, 200, sSearch);
+            setStudents(paged.data.filter(u => u.role === 'student'));
+            setStudentsTotal(paged.total);
+          }
           setStudentsPage(1);
         } catch (e) {
           console.error("Lỗi lọc học sinh:", e);
@@ -279,6 +311,153 @@ export default function AdminDashboard() {
   const [bChapterFilter, setBChapterFilter] = useState('all');
   const [bTypeFilter, setBTypeFilter] = useState<QuestionType | 'all'>('all');
   const [bSearch, setBSearch] = useState('');
+  const [bSubjectFilter, setBSubjectFilter] = useState<string>('all');
+
+  const isSuperAdmin = currentUser?.role === 'superadmin';
+
+  // Chuyển tab giáo viên về quizzes nếu người dùng không phải superadmin
+  useEffect(() => {
+    if (activeTab === 'teachers' && !isSuperAdmin) {
+      setActiveTab('quizzes');
+    }
+  }, [activeTab, isSuperAdmin]);
+
+  // Quản lý dữ liệu phân quyền theo giáo viên
+  const accessibleQuizzes = useMemo(() => {
+    if (isSuperAdmin) return quizzes;
+    return quizzes.filter(q => {
+      // Đề do mình tạo hoặc được chia sẻ với giáo viên
+      if (q.createdBy === currentUser?.id) return true;
+      if (q.isSharedWithTeachers) return true;
+      // Nếu cùng môn học và không có creator cụ thể
+      if (q.subject && currentUser?.subject && isSameSubject(q.subject, currentUser.subject)) return true;
+      if (!q.createdBy) return true;
+      return false;
+    });
+  }, [quizzes, isSuperAdmin, currentUser?.id, currentUser?.subject]);
+
+  const accessibleQuizIds = useMemo(() => new Set(accessibleQuizzes.map(q => q.id)), [accessibleQuizzes]);
+
+  // Quản lý phân quyền lớp học: Giáo viên chỉ thấy lớp do mình tạo hoặc lớp được chia sẻ (SuperAdmin thấy tất cả)
+  const accessibleClasses = useMemo(() => {
+    if (isSuperAdmin) return classes;
+    return classes.filter(c => {
+      if (c.createdBy && c.createdBy === currentUser?.id) return true;
+      if (c.isSharedWithTeachers) return true;
+      return false;
+    });
+  }, [classes, isSuperAdmin, currentUser?.id]);
+
+  const accessibleClassIds = useMemo(() => new Set(accessibleClasses.map(c => c.id)), [accessibleClasses]);
+  const accessibleClassNames = useMemo(() => new Set(accessibleClasses.map(c => c.name.trim().toLowerCase())), [accessibleClasses]);
+
+  // Bản đồ tra cứu học sinh toàn hệ thống (để đối soát thông tin lớp học và người tạo)
+  const studentMapById = useMemo(() => {
+    const map = new Map<string, User>();
+    students.forEach(s => {
+      if (s.id) map.set(s.id, s);
+    });
+    return map;
+  }, [students]);
+
+  const studentMapByCode = useMemo(() => {
+    const map = new Map<string, User>();
+    students.forEach(s => {
+      if (s.studentCode) map.set(s.studentCode.trim().toUpperCase(), s);
+    });
+    return map;
+  }, [students]);
+
+  const quizMapById = useMemo(() => {
+    const map = new Map<string, Quiz>();
+    quizzes.forEach(q => {
+      if (q.id) map.set(q.id, q);
+    });
+    return map;
+  }, [quizzes]);
+
+  // Quản lý phân quyền kết quả thi:
+  // - SuperAdmin: toàn quyền thấy mọi kết quả
+  // - Giáo viên: chỉ thấy kết quả của học sinh thuộc các lớp do mình quản lý/tạo, học sinh do mình tạo, hoặc bài làm đề thi do mình tạo (nếu học sinh chưa phân lớp)
+  const accessibleResults = useMemo(() => {
+    if (isSuperAdmin) return results;
+    return results.filter(r => {
+      // 1. Phải thuộc danh sách đề thi giáo viên có quyền truy cập
+      if (!accessibleQuizIds.has(r.quizId)) return false;
+
+      // 2. Tìm thông tin học sinh qua ID hoặc Mã học sinh (MAHS)
+      const student = (r.studentId ? studentMapById.get(r.studentId) : null) || 
+                      (r.studentCode && r.studentCode !== 'N/A' ? studentMapByCode.get(r.studentCode.trim().toUpperCase()) : null);
+
+      if (student) {
+        // Học sinh thuộc lớp của giáo viên này hoặc lớp được chia sẻ
+        if (student.classId && accessibleClassIds.has(student.classId)) return true;
+        if (student.className && accessibleClassNames.has(student.className.trim().toLowerCase())) return true;
+        // Học sinh do chính giáo viên này tạo/nhập danh sách
+        if (student.createdById && student.createdById === currentUser?.id) return true;
+
+        // Nếu học sinh đã có lớp hoặc do GV khác tạo -> Tuyệt đối không hiển thị cho GV này
+        if (student.classId || student.className || (student.createdById && student.createdById !== currentUser?.id)) {
+          return false;
+        }
+
+        // Học sinh chưa phân lớp: chỉ hiển thị nếu làm đề do GV này trực tiếp tạo
+        const quiz = quizMapById.get(r.quizId);
+        return quiz?.createdBy === currentUser?.id;
+      }
+
+      // Thí sinh tự do / chưa gán hồ sơ: chỉ hiển thị nếu làm đề do chính giáo viên này tạo
+      const quiz = quizMapById.get(r.quizId);
+      return quiz?.createdBy === currentUser?.id;
+    });
+  }, [results, isSuperAdmin, accessibleQuizIds, studentMapById, studentMapByCode, accessibleClassIds, accessibleClassNames, currentUser?.id, quizMapById]);
+
+  // Quản lý phân quyền học sinh: Giáo viên thấy học sinh thuộc các lớp do mình quản lý, học sinh do mình tạo/nhập, và học sinh chưa phân lớp để có thể chọn gán vào lớp
+  const accessibleStudents = useMemo(() => {
+    if (isSuperAdmin) return students;
+    return students.filter(s => {
+      // 1. Học sinh thuộc lớp của giáo viên này (hoặc lớp được chia sẻ)
+      if (s.classId && accessibleClassIds.has(s.classId)) return true;
+      if (s.className && accessibleClassNames.has(s.className.trim().toLowerCase())) return true;
+      // 2. Học sinh do chính giáo viên này tạo / nhập CSV
+      if (s.createdById && s.createdById === currentUser?.id) return true;
+      // 3. Học sinh chưa phân lớp và chưa có GV quản lý riêng
+      if (!s.classId && !s.className && (!s.createdById || s.createdById === currentUser?.id)) return true;
+      return false;
+    });
+  }, [students, isSuperAdmin, accessibleClassIds, accessibleClassNames, currentUser?.id]);
+
+  // Quản lý chương trình học theo môn: Giáo viên cùng môn sẽ nhìn thấy và dùng chung, khác môn thì không thấy
+  const accessibleChapters = useMemo(() => {
+    if (isSuperAdmin) return chapters;
+    const teacherSubject = currentUser?.subject?.trim();
+    if (!teacherSubject) return chapters; // Nếu giáo viên chưa khai báo môn, hiển thị các chương
+    return chapters.filter(c => {
+      // 1. Cùng môn học -> Thấy và dùng chung
+      if (c.subject && isSameSubject(c.subject, teacherSubject)) return true;
+      // 2. Do chính giáo viên này tạo
+      if (c.createdBy && c.createdBy === currentUser?.id) return true;
+      // 3. Chương chưa gán môn
+      if (!c.subject) return true;
+      return false;
+    });
+  }, [chapters, isSuperAdmin, currentUser?.subject, currentUser?.id]);
+
+  // Quản lý ngân hàng câu hỏi theo môn: Giáo viên cùng môn sẽ nhìn thấy và dùng chung, khác môn thì không thấy
+  const accessibleBankQuestions = useMemo(() => {
+    if (isSuperAdmin) return bankQuestions;
+    const teacherSubject = currentUser?.subject?.trim();
+    if (!teacherSubject) return bankQuestions;
+    return bankQuestions.filter(q => {
+      // 1. Cùng môn học -> Thấy và dùng chung
+      if (q.subject && isSameSubject(q.subject, teacherSubject)) return true;
+      // 2. Do chính giáo viên này tạo
+      if (q.createdBy && q.createdBy === currentUser?.id) return true;
+      // 3. Câu hỏi chưa gán môn
+      if (!q.subject) return true;
+      return false;
+    });
+  }, [bankQuestions, isSuperAdmin, currentUser?.subject, currentUser?.id]);
 
   // Alert and Confirmation Modal State
   const [alertModal, setAlertModal] = useState<{
@@ -343,6 +522,7 @@ export default function AdminDashboard() {
     classId?: string;
     className?: string;
     academicYear?: string;
+    subject?: string;
   }>({ fullName: '', studentCode: '', grade: '12' as Grade, password: '123' });
   const [isSavingStudent, setIsSavingStudent] = useState(false);
   const [viewingStudent, setViewingStudent] = useState<User | null>(null);
@@ -377,34 +557,79 @@ export default function AdminDashboard() {
 
   // Quiz Handlers
   const handleCreateQuiz = () => {
-    const currentYear = getCurrentAcademicYear();
-    setEditingQuizId(null); setQuizTitle(''); setQuizGrade('12'); setQuizType('test'); setQuizAcademicYear(currentYear);
-    setIsPublished(false); setIsMonitored(false); setIsUnlisted(false);
-    setTargetType('all'); setAssignedClassIds([]); setMaxAttempts(2); setAllowReview(false);
+    setEditingQuizId(null); setQuizTitle(''); setQuizGrade('12'); setQuizType('test');
+    setQuizMaxAttempts(1);
+    setQuizAcademicYear(getCurrentAcademicYear());
+    setQuizSubject(mySubject || currentUser?.subject || 'Toán');
+    setIsPublished(false); setIsMonitored(false); setShowResultAnswers(true); setIsUnlisted(false);
+    setIsSharedWithTeachers(false);
+    setTargetType(isSuperAdmin ? 'all' : 'classes'); setAssignedClassIds([]);
     setDuration(45); setOrderIndex(1); setCategory('');
     setStartTime(''); setEndTime(''); setQuestions([]); setIsEditingQuiz(true);
     setActiveTab('quizzes');
   };
 
   const handleEditQuiz = async (quiz: Quiz) => {
-    setIsDataLoading(true);
+    // Kiểm tra quyền sửa đề: Chỉ tác giả tạo đề hoặc SuperAdmin mới được sửa
+    const isMine = Boolean(currentUser?.id && quiz.createdBy === currentUser.id);
+    if (!isSuperAdmin && !isMine) {
+      showAlert(
+        "Không có quyền chỉnh sửa", 
+        "Bạn chỉ có quyền chỉnh sửa đề thi do chính mình tạo ra. Đối với đề thi của giáo viên khác chia sẻ, bạn có thể xem chi tiết hoặc dùng tính năng 'Giao Lớp' để giao cho học sinh.", 
+        "warning"
+      );
+      return;
+    }
+
+    setIsFetchingQuizDetail(true);
     try {
-        const fullQuiz = await getQuizById(quiz.id);
-        if (fullQuiz) {
-            setEditingQuizId(fullQuiz.id); setQuizTitle(fullQuiz.title); setQuizGrade(fullQuiz.grade);
-            setQuizAcademicYear(fullQuiz.academicYear || getCurrentAcademicYear());
-            setQuizType(fullQuiz.type); setIsPublished(fullQuiz.isPublished); setIsMonitored(fullQuiz.isMonitored || false);
-            setIsUnlisted(fullQuiz.isUnlisted || false);
-            setTargetType(fullQuiz.targetType || 'all');
-            setAssignedClassIds(fullQuiz.assignedClassIds || []);
-            setMaxAttempts(fullQuiz.maxAttempts ?? 2);
-            setAllowReview(fullQuiz.allowReview ?? (fullQuiz.type === 'practice'));
-            setDuration(fullQuiz.durationMinutes); setOrderIndex(fullQuiz.orderIndex || 1); setCategory(fullQuiz.category || ''); setStartTime(fullQuiz.startTime || '');
-            setEndTime(fullQuiz.endTime || ''); setQuestions(fullQuiz.questions); setIsEditingQuiz(true);
-            setActiveTab('quizzes');
+        let fullQuiz: Quiz | null = null;
+        try {
+            fullQuiz = await getQuizById(quiz.id);
+        } catch (e) {
+            console.warn("getQuizById exception, fallback to provided quiz object:", e);
         }
+
+        const qData: Quiz = (fullQuiz && fullQuiz.questions && fullQuiz.questions.length > 0)
+            ? fullQuiz
+            : { ...quiz, ...(fullQuiz || {}) };
+
+        setEditingQuizId(qData.id); 
+        setQuizTitle(qData.title || ''); 
+        setQuizGrade(qData.grade || '12');
+        setQuizAcademicYear(qData.academicYear || getQuizAcademicYear(qData));
+        setQuizSubject(qData.subject || mySubject || currentUser?.subject || 'Toán');
+        setQuizType(qData.type || 'test'); 
+        setQuizMaxAttempts(qData.maxAttempts !== undefined ? qData.maxAttempts : (qData.type === 'test' ? 1 : 0));
+        setIsPublished(Boolean(qData.isPublished)); 
+        setIsMonitored(Boolean(qData.isMonitored));
+        setShowResultAnswers(qData.showResultAnswers !== false);
+        setIsUnlisted(Boolean(qData.isUnlisted));
+        setIsSharedWithTeachers(Boolean(qData.isSharedWithTeachers));
+        setTargetType(isSuperAdmin ? (qData.targetType || 'all') : 'classes');
+        setAssignedClassIds(qData.assignedClassIds || []);
+        setDuration(qData.durationMinutes || 45); 
+        setOrderIndex(qData.orderIndex || 1); 
+        setCategory(qData.category || ''); 
+        setStartTime(qData.startTime || '');
+        setEndTime(qData.endTime || ''); 
+        setQuestions(qData.questions || []); 
+        setIsEditingQuiz(true);
+        setActiveTab('quizzes');
+    } catch (err) {
+        console.error("Lỗi khi mở sửa đề:", err);
+        setEditingQuizId(quiz.id);
+        setQuizTitle(quiz.title || '');
+        setQuizGrade(quiz.grade || '12');
+        setQuizAcademicYear(quiz.academicYear || getQuizAcademicYear(quiz));
+        setQuizSubject(quiz.subject || mySubject || currentUser?.subject || 'Toán');
+        setQuizMaxAttempts(quiz.maxAttempts !== undefined ? quiz.maxAttempts : (quiz.type === 'test' ? 1 : 0));
+        setShowResultAnswers(quiz.showResultAnswers !== false);
+        setQuestions(quiz.questions || []);
+        setIsEditingQuiz(true);
+        setActiveTab('quizzes');
     } finally {
-        setIsDataLoading(false);
+        setIsFetchingQuizDetail(false);
     }
   };
 
@@ -415,6 +640,34 @@ export default function AdminDashboard() {
         if (fullQuiz) setPreviewQuiz(fullQuiz);
     } finally {
         setIsDataLoading(false);
+    }
+  };
+
+  const handleAssignClasses = async (quiz: Quiz, selectedClassIds: string[]) => {
+    try {
+        const myClassIds = isSuperAdmin ? undefined : accessibleClasses.map(c => c.id);
+        const { finalClassIds, targetType } = await assignQuizToClasses(quiz.id, selectedClassIds, myClassIds);
+        
+        // Cập nhật trực tiếp 1 đề thi trong danh sách quizzes trên UI mà không cần tải lại toàn bộ danh sách
+        setQuizzes(prev => prev.map(q => {
+          if (q.id === quiz.id) {
+            return {
+              ...q,
+              targetType: targetType as any,
+              assignedClassIds: finalClassIds
+            };
+          }
+          return q;
+        }));
+
+        showAlert(
+            "Giao đề thành công", 
+            `Đã cập nhật phân công đề thi "${quiz.title}" cho ${selectedClassIds.length} lớp học. Học sinh trong các lớp này có thể truy cập làm bài.`,
+            "success"
+        );
+    } catch (e: any) {
+        console.error("Lỗi phân công giao đề:", e);
+        showAlert("Lỗi giao đề", e.message || "Không thể lưu phân công đề thi cho lớp học.", "error");
     }
   };
 
@@ -452,32 +705,93 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleSyncBank = async (forceAll: boolean = false) => {
-    const confirmMsg = forceAll 
-      ? "Hệ thống sẽ quét lại TOÀN BỘ đề thi (bất kể đã đồng bộ hay chưa) và đối chiếu khử trùng lặp vào Ngân hàng. Tiếp tục?" 
-      : "Hệ thống sẽ quét các đề thi MỚI CHƯA ĐỒNG BỘ, tự động khử trùng lặp và đẩy vào Ngân hàng câu hỏi. Tiếp tục?";
-    if (!confirm(confirmMsg)) return;
-    setIsSyncing(true);
-    try {
-      const stats = await syncQuizzesToBank(forceAll);
-      if (stats.syncedQuizzesCount === 0) {
-        showAlert(
-          "Dữ liệu đã cập nhật",
-          `Tất cả đề thi (${stats.totalQuizzes} đề) đều đã được đồng bộ vào Ngân hàng từ trước. Không có đề thi mới nào cần quét.`,
-          "info"
-        );
-      } else {
-        showAlert(
-          "Đồng bộ Ngân hàng thành công",
-          `Đã quét ${stats.syncedQuizzesCount} đề thi mới (${stats.total} câu hỏi):\n• Thêm mới vào Ngân hàng: ${stats.added} câu\n• Cập nhật thông tin: ${stats.updated} câu\n• Đã có sẵn (bỏ qua trùng lặp): ${stats.skipped} câu\n• Đã gắn cờ đồng bộ cho ${stats.syncedQuizzesCount} đề thi.`,
-          "success"
-        );
+  const handleSyncBank = async () => {
+    if (!isSuperAdmin) {
+      showAlert("Không có quyền", "Chức năng đồng bộ Ngân hàng câu hỏi chỉ dành riêng cho Quản trị viên cấp cao (Super Admin).", "warning");
+      return;
+    }
+    const targetSubject = bSubjectFilter;
+    const isSubjectSpecific = targetSubject && targetSubject !== 'all';
+    const subjectLabel = isSubjectSpecific ? `Môn ${targetSubject}` : 'Tất cả các môn';
+
+    showConfirm(
+      `Cập nhật từ Đề thi vào Ngân hàng (${subjectLabel})`,
+      `Hệ thống sẽ quét các câu hỏi thuộc ${subjectLabel} trong tất cả đề thi và đồng bộ vào Ngân hàng. Thuật toán thông minh sẽ tự động cập nhật thông tin và ngăn chặn 100% việc tạo câu trùng lặp. Bạn có muốn thực hiện?`,
+      async () => {
+        setIsSyncing(true);
+        try {
+          const stats = await syncQuizzesToBank(targetSubject);
+          showAlert(
+            "Đồng bộ thành công",
+            `Đã quét ${stats.totalScanned} lượt câu hỏi (${subjectLabel}):\n• Thêm mới vào Ngân hàng: ${stats.added} câu\n• Cập nhật thông tin: ${stats.updated} câu\n• Đã loại bỏ trùng lặp: ${stats.skippedDuplicates} lượt`,
+            "success"
+          );
+          await loadTabData('bank');
+        } catch (e: any) {
+          showAlert("Lỗi đồng bộ", "Lỗi khi đồng bộ Ngân hàng: " + (e.message || "Lỗi không xác định"), "error");
+        } finally {
+          setIsSyncing(false);
+        }
       }
-      loadTabData('bank');
-    } catch (e) {
-      showAlert("Lỗi đồng bộ", "Có lỗi xảy ra khi đồng bộ ngân hàng câu hỏi.", "error");
-    } finally {
-      setIsSyncing(false);
+    );
+  };
+
+  const handleDeduplicateBank = async () => {
+    if (!isSuperAdmin) {
+      showAlert("Không có quyền", "Chức năng quét và gộp trùng lặp chỉ dành riêng cho Quản trị viên cấp cao (Super Admin).", "warning");
+      return;
+    }
+    const targetSubject = bSubjectFilter;
+    const isSubjectSpecific = targetSubject && targetSubject !== 'all';
+    const subjectLabel = isSubjectSpecific ? `Môn ${targetSubject}` : 'Tất cả các môn';
+
+    showConfirm(
+      `Quét & Gộp câu trùng lặp (${subjectLabel})`,
+      `Hệ thống sẽ phân tích câu hỏi thuộc ${subjectLabel} trong Ngân hàng, nhận diện các câu có nội dung và đáp án giống hệt nhau để tự động gộp lại giữ 1 bản chuẩn nhất (đầy đủ hình ảnh/lời giải) và loại bỏ bản thừa. Bạn có muốn tiếp tục?`,
+      async () => {
+        setIsSyncing(true);
+        try {
+          const res = await deduplicateBankQuestions(targetSubject);
+          if (res.duplicatesRemoved > 0) {
+            showAlert(
+              "Đã dọn dẹp thành công",
+              `Quét tổng cộng ${res.totalScanned} câu hỏi (${subjectLabel}). Đã loại bỏ ${res.duplicatesRemoved} bản sao trùng lặp, giữ lại ${res.uniqueRemaining} câu hỏi chuẩn nhất trong Ngân hàng!`,
+              "success"
+            );
+          } else {
+            showAlert(
+              "Ngân hàng hoàn hảo",
+              `Quét ${res.totalScanned} câu hỏi (${subjectLabel}). Không có câu hỏi nào bị trùng lặp!`,
+              "info"
+            );
+          }
+          await loadTabData('bank');
+        } catch (e: any) {
+          showAlert("Lỗi dọn dẹp", "Lỗi khi quét trùng lặp: " + (e.message || "Lỗi không xác định"), "error");
+        } finally {
+          setIsSyncing(false);
+        }
+      }
+    );
+  };
+
+  const handleDeleteBankQuestion = async (id: string) => {
+    try {
+      await deleteBankQuestion(id);
+      setBankQuestions(prev => prev.filter(q => q.id !== id));
+      showAlert("Thành công", "Đã xóa câu hỏi khỏi Ngân hàng câu hỏi!", "success");
+    } catch (err: any) {
+      showAlert("Lỗi", "Không thể xóa câu hỏi: " + (err.message || "Lỗi không xác định"), "error");
+    }
+  };
+
+  const handleDeleteBatchBankQuestions = async (ids: string[]) => {
+    try {
+      await deleteBatchBankQuestions(ids);
+      setBankQuestions(prev => prev.filter(q => !ids.includes(q.id)));
+      showAlert("Thành công", `Đã xóa thành công ${ids.length} câu hỏi khỏi Ngân hàng!`, "success");
+    } catch (err: any) {
+      showAlert("Lỗi", "Không thể xóa các câu hỏi đã chọn: " + (err.message || "Lỗi không xác định"), "error");
     }
   };
 
@@ -500,145 +814,126 @@ export default function AdminDashboard() {
         part3Count: config.p3,
         matrix: config.matrix,
         pdfBase64: config.pdfBase64
-      });
+      }, customApiKey);
       
       if (config.target === 'editor') {
-        setQuestions([...questions, ...newQs]);
+        const enriched = newQs.map(q => ({
+          ...q,
+          subject: currentUser?.subject || '',
+          createdBy: currentUser?.id,
+          createdByName: currentUser?.fullName
+        }));
+        setQuestions([...questions, ...enriched]);
         setActiveTab('quizzes');
         setIsEditingQuiz(true);
         if (!quizTitle) setQuizTitle(config.topic.slice(0, 50).toUpperCase());
       } else {
         for (const q of newQs) {
-          await saveBankQuestion(q);
+          await saveBankQuestion({
+            ...q,
+            subject: currentUser?.subject || '',
+            createdBy: currentUser?.id,
+            createdByName: currentUser?.fullName
+          });
         }
-        alert(`Đã lưu ${newQs.length} câu hỏi mới vào Ngân hàng!`);
+        showAlert("Thành công", `Đã lưu ${newQs.length} câu hỏi mới vào Ngân hàng!`, "success");
         loadTabData('bank');
       }
     } catch (error: any) {
-      alert(error.message);
+      showAlert("Lỗi AI Soạn đề", error.message || "Không thể tạo câu hỏi", "error");
     } finally {
       setIsAiLoading(false);
     }
   };
 
   const handleSaveQuiz = async () => {
-    if (!quizTitle) return alert("Vui lòng nhập tiêu đề đề thi!");
-    if (questions.length === 0) return alert("Đề thi chưa có câu hỏi nào!");
+    if (!quizTitle.trim()) return showAlert("Thiếu thông tin", "Vui lòng nhập tiêu đề đề thi!", "warning");
+    if (questions.length === 0) return showAlert("Thiếu câu hỏi", "Đề thi chưa có câu hỏi nào!", "warning");
     
     setIsSavingInProgress(true);
+    const existingQuiz = editingQuizId ? quizzes.find(q => q.id === editingQuizId) : null;
+    const finalQuizSubject = quizSubject || existingQuiz?.subject || mySubject || currentUser?.subject || 'Toán';
+
+    const finalTargetType = isSuperAdmin ? (targetType || 'all') : 'classes';
+
     const quiz: Quiz = {
-      id: editingQuizId || uuidv4(), title: quizTitle, grade: quizGrade, type: quizType,
-      academicYear: quizAcademicYear || '2025-2026',
-      isPublished, isMonitored, isUnlisted, durationMinutes: duration, orderIndex, category, startTime, endTime,
-      targetType, assignedClassIds, maxAttempts: maxAttempts || 2,
-      allowReview: quizType === 'practice' ? true : allowReview,
-      questions, createdAt: new Date().toISOString(), description: '',
-      questionCount: questions.length
+      id: editingQuizId || uuidv4(), 
+      title: quizTitle, 
+      grade: quizGrade, 
+      type: quizType,
+      maxAttempts: quizType === 'test' ? (quizMaxAttempts ?? 1) : (quizMaxAttempts || 0),
+      academicYear: quizAcademicYear || existingQuiz?.academicYear || getCurrentAcademicYear(),
+      subject: finalQuizSubject,
+      isPublished, 
+      isMonitored, 
+      showResultAnswers: quizType === 'test' ? (showResultAnswers !== false) : true,
+      isUnlisted, 
+      isSharedWithTeachers,
+      createdBy: existingQuiz ? (existingQuiz.createdBy || currentUser?.id) : currentUser?.id,
+      createdByName: existingQuiz ? (existingQuiz.createdByName || currentUser?.fullName) : currentUser?.fullName,
+      durationMinutes: duration, 
+      orderIndex, 
+      category, 
+      startTime, 
+      endTime,
+      targetType: finalTargetType, 
+      assignedClassIds: finalTargetType === 'all' ? [] : (assignedClassIds || []),
+      questions: questions.map(q => ({
+        ...q,
+        subject: q.subject || finalQuizSubject,
+        createdBy: q.createdBy || currentUser?.id,
+        createdByName: q.createdByName || currentUser?.fullName
+      })), 
+      createdAt: existingQuiz ? existingQuiz.createdAt : new Date().toISOString(), 
+      description: ''
     };
     
     try {
-      const metaQuiz: Quiz = { ...quiz, questions: [] };
       if (editingQuizId) {
           await updateQuiz(quiz);
-          // Cập nhật trực tiếp vào State React đảm bảo không trùng lặp ID
-          setQuizzes(prev => {
-            const exists = prev.some(q => q.id === quiz.id);
-            if (exists) {
-              return prev.map(q => q.id === quiz.id ? metaQuiz : q);
-            }
-            return [metaQuiz, ...prev];
-          });
+          // Cập nhật ngay trong local state của quizzes
+          setQuizzes(prev => prev.map(q => q.id === quiz.id ? { ...q, ...quiz, questionCount: quiz.questions?.length || 0 } : q));
       } else {
           await saveQuiz(quiz);
-          // Thêm trực tiếp đề mới vào State React (lọc bỏ nếu trùng id do cache/sync)
-          setQuizzes(prev => [metaQuiz, ...prev.filter(q => q.id !== quiz.id)]);
+          setQuizzes(prev => [quiz, ...prev.filter(q => q.id !== quiz.id)]);
       }
       setIsEditingQuiz(false);
-      alert("Đã lưu đề thi thành công vào Database Cloud!");
+      showAlert("Thành công", "Đã lưu đề thi thành công vào Database Cloud!", "success");
     } catch (e: any) { 
-      alert("Lỗi khi lưu đề thi: " + (e.message || "Không xác định"));
+      showAlert("Lỗi lưu đề thi", e.message || "Không xác định", "error");
     } finally {
       setIsSavingInProgress(false);
     }
   };
 
-  const handleToggleAllowReview = async (quizId: string, currentAllowReview: boolean) => {
-    const newStatus = !currentAllowReview;
-    try {
-      await updateQuizAllowReview(quizId, newStatus);
-      setQuizzes(prev => prev.map(q => q.id === quizId ? { ...q, allowReview: newStatus } : q));
+  const handleDeleteQuiz = (id: string) => {
+    const targetQuiz = quizzes.find(q => q.id === id);
+    const isMine = Boolean(currentUser?.id && targetQuiz?.createdBy === currentUser.id);
+    if (!isSuperAdmin && !isMine) {
       showAlert(
-        newStatus ? "Đã mở đáp án" : "Đã khóa đáp án",
-        newStatus 
-          ? "Học sinh hiện đã có thể xem lại chi tiết đáp án & lời giải của đề thi này." 
-          : "Đã ẩn toàn bộ đáp án và lời giải chi tiết. Học sinh chỉ thấy điểm tổng kết (chống lộ đề).",
-        "success"
+        "Không có quyền xóa", 
+        "Bạn chỉ có quyền xóa đề thi do chính mình tạo ra.", 
+        "warning"
       );
-    } catch (e: any) {
-      showAlert("Lỗi", "Không thể cập nhật quyền xem đáp án: " + (e.message || "Không xác định"), "error");
+      return;
     }
-  };
 
-  const handleDeleteQuiz = async (id: string) => {
-    if (confirm("Bạn có chắc chắn muốn xóa vĩnh viễn đề thi này không?")) { 
-        setIsDataLoading(true);
+    showConfirm(
+      "Xác nhận xóa đề thi",
+      "Bạn có chắc chắn muốn xóa vĩnh viễn đề thi này không? Dữ liệu bảng điểm liên quan sẽ không thể phục hồi.",
+      async () => {
+        // Cập nhật ngay trên UI để mượt mà không delay
+        setQuizzes(prev => prev.filter(q => q.id !== id));
         try {
-            await deleteQuiz(id); 
-            // Xóa trực tiếp khỏi State React mà không cần re-fetch toàn bộ danh sách
-            setQuizzes(prev => prev.filter(q => q.id !== id));
-            alert("Đã xóa đề thi thành công.");
+          await deleteQuiz(id); 
+          showAlert("Thành công", "Đã xóa đề thi thành công.", "success");
         } catch (e: any) {
-            alert("Lỗi khi xóa đề thi: " + (e.message || "Không xác định"));
-        } finally {
-            setIsDataLoading(false);
+          showAlert("Lỗi khi xóa đề thi", e.message || "Không xác định", "error");
+          // Phục hồi lại nếu lỗi
+          loadTabData('quizzes', true);
         }
-    }
-  };
-
-  const handleQuickAssignTarget = async (quizIds: string[], targetType: 'all' | 'classes', assignedClassIds: string[]) => {
-    try {
-      if (quizIds.length === 1) {
-        await updateQuizTarget(quizIds[0], targetType, assignedClassIds);
-      } else {
-        await batchUpdateQuizTarget(quizIds, targetType, assignedClassIds);
       }
-      // Cập nhật ngay trên state local để phản hồi tức thì
-      setQuizzes(prev => prev.map(q => {
-        if (quizIds.includes(q.id)) {
-          return {
-            ...q,
-            targetType,
-            assignedClassIds: targetType === 'classes' ? assignedClassIds : []
-          };
-        }
-        return q;
-      }));
-      alert(`Đã cập nhật phân quyền phòng/lớp cho ${quizIds.length} đề thi thành công!`);
-    } catch (error: any) {
-      alert("Lỗi khi cập nhật phân quyền: " + (error.message || "Không xác định"));
-    }
-  };
-
-  const handleQuickUpdateAcademicYear = async (quizIds: string[], newYear: string) => {
-    try {
-      if (quizIds.length === 1) {
-        await updateQuizAcademicYear(quizIds[0], newYear);
-      } else {
-        await batchUpdateQuizAcademicYear(quizIds, newYear);
-      }
-      setQuizzes(prev => prev.map(q => {
-        if (quizIds.includes(q.id)) {
-          return {
-            ...q,
-            academicYear: newYear
-          };
-        }
-        return q;
-      }));
-    } catch (error: any) {
-      alert("Lỗi khi cập nhật năm học: " + (error.message || "Không xác định"));
-      throw error;
-    }
+    );
   };
 
   const handlePdfExtract = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -648,33 +943,52 @@ export default function AdminDashboard() {
     try {
       const reader = new FileReader();
       reader.onload = async () => {
-        const base64 = (reader.result as string).split(',')[1];
-        const newQs = await parseQuestionsFromPDF(base64);
-        setQuestions([...questions, ...newQs]);
-        setIsAiLoading(false);
+        try {
+          const base64 = (reader.result as string).split(',')[1];
+          const newQs = await parseQuestionsFromPDF(base64, customApiKey);
+          setQuestions([...questions, ...newQs]);
+          showAlert("Thành công", `Đã trích xuất thành công ${newQs.length} câu hỏi từ file PDF!`, "success");
+        } catch (err: any) {
+          showAlert("Lỗi trích xuất PDF", err.message || "Không thể đọc nội dung PDF", "error");
+        } finally {
+          setIsAiLoading(false);
+        }
       };
       reader.readAsDataURL(file);
-    } catch (error: any) { alert(error.message); setIsAiLoading(false); }
+    } catch (error: any) { 
+      showAlert("Lỗi đọc file", error.message, "error"); 
+      setIsAiLoading(false); 
+    }
   };
 
   const handleTextExtract = async (text: string) => {
       if (!text.trim()) return;
       setIsAiLoading(true);
       try {
-          const newQs = await parseQuestionsFromText(text);
+          const newQs = await parseQuestionsFromText(text, customApiKey);
           setQuestions([...questions, ...newQs]);
+          showAlert("Thành công", `Đã trích xuất ${newQs.length} câu hỏi từ văn bản!`, "success");
       } catch (error: any) {
-          alert(error.message);
+          showAlert("Lỗi trích xuất văn bản", error.message, "error");
       } finally {
           setIsAiLoading(false);
       }
   };
 
   const handleUploadImage = async (id: string, f: File) => {
+    if (!f) return;
     setUploadingId(id);
-    const url = await uploadQuizImage(f);
-    if (url) setQuestions(questions.map(q => q.id === id ? { ...q, imageUrl: url } : q));
-    setUploadingId(null);
+    try {
+      const url = await uploadQuizImage(f);
+      if (url) {
+        setQuestions(prev => prev.map(q => q.id === id ? { ...q, imageUrl: url } : q));
+      }
+    } catch (err: any) {
+      console.error("Lỗi khi tải ảnh:", err);
+      showAlert("Lỗi tải ảnh", "Không thể xử lý ảnh: " + (err.message || "Lỗi không xác định"), "error");
+    } finally {
+      setUploadingId(null);
+    }
   };
 
   const handleCleanLabels = () => {
@@ -775,6 +1089,7 @@ export default function AdminDashboard() {
             const role = (getVal(['role']) || 'student') as Role;
             const rawClassName = getVal(['lop', 'class', 'className', 'classname']);
             const rawAcademicYear = getVal(['nienkhoa', 'academicYear', 'academic_year', 'namhoc']);
+            const rawSubject = getVal(['mon', 'subject', 'monhoc', 'mon_hoc']);
 
             const studentCode = rawMahs.toUpperCase();
             const username = studentCode.toLowerCase();
@@ -793,9 +1108,13 @@ export default function AdminDashboard() {
               fullName,
               studentCode,
               grade: (matchedClass ? matchedClass.grade : grade) as Grade,
-              classId: matchedClass?.id || (row.classId || row.class_id || undefined),
-              className: matchedClass?.name || (rawClassName || undefined),
-              academicYear: matchedClass?.academicYear || (rawAcademicYear || undefined),
+              classId: matchedClass?.id || row.classId || row.class_id || '',
+              className: matchedClass?.name || rawClassName || '',
+              academicYear: matchedClass?.academicYear || rawAcademicYear || '',
+              subject: matchedClass?.subject || rawSubject || currentUser?.subject || '',
+              createdById: currentUser?.id || '',
+              teacherName: currentUser?.fullName || '',
+              createdAt: new Date().toISOString(),
               points: Number(row.points || 0)
             };
           }).filter(u => u.role === 'student' && u.studentCode);
@@ -896,15 +1215,36 @@ export default function AdminDashboard() {
     setIsSavingStudent(true);
     try {
       const newUser: User = {
-        id: selectedStudent?.id || uuidv4(), username: code.toLowerCase(),
-        password: studentForm.password, role: 'student', fullName: studentForm.fullName,
-        studentCode: code, grade: studentForm.grade,
+        id: selectedStudent?.id || uuidv4(), 
+        username: code.toLowerCase(),
+        password: studentForm.password, 
+        role: 'student', 
+        fullName: studentForm.fullName,
+        studentCode: code, 
+        grade: studentForm.grade,
         classId: studentForm.classId,
         className: studentForm.className,
         academicYear: studentForm.academicYear,
+        subject: studentForm.subject || selectedStudent?.subject || currentUser?.subject || '',
+        createdById: selectedStudent?.createdById || currentUser?.id || '',
+        createdAt: selectedStudent?.createdAt || new Date().toISOString(),
         points: selectedStudent?.points || 0
       };
-      await saveUser(newUser); setIsStudentModalOpen(false); loadTabData('students');
+      
+      // Cập nhật State tức thì để UI repaint ngay lập tức không bị trễ
+      setStudents(prev => {
+        const idx = prev.findIndex(s => s.id === newUser.id);
+        if (idx >= 0) {
+          const updated = [...prev];
+          updated[idx] = newUser;
+          return updated;
+        }
+        return [newUser, ...prev];
+      });
+
+      await saveUser(newUser); 
+      setIsStudentModalOpen(false); 
+      await loadTabData('students', true);
       showAlert("Thành công", `Đã lưu học sinh ${studentForm.fullName} thành công!`, "success");
     } catch (e: any) { 
       showAlert("Lỗi", "Lỗi lưu học sinh trên Cloud", "error"); 
@@ -921,7 +1261,8 @@ export default function AdminDashboard() {
           classId: classInfo.classId,
           className: classInfo.className,
           academicYear: classInfo.academicYear,
-          grade: classInfo.grade
+          grade: classInfo.grade,
+          subject: classInfo.subject
         });
       } else {
         await assignStudentsToClass(studentIds, null);
@@ -1026,19 +1367,22 @@ export default function AdminDashboard() {
   };
 
   const dbConnected = isDatabaseConnected();
+  const rawKey = process.env.API_KEY;
+  const isAIReady = Boolean(rawKey && rawKey !== "undefined" && rawKey.length > 10);
 
   return (
-    <div className="min-h-screen bg-white flex">
-      <aside className="w-16 lg:w-64 bg-slate-900 text-white flex flex-col shrink-0 transition-all">
+    <div className="h-full bg-white flex overflow-hidden min-h-0 flex-1">
+      <aside className="w-16 lg:w-64 bg-slate-900 text-white flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-all">
         <div className="p-4 lg:p-8 border-b border-white/10 text-center lg:text-left">
           <h2 className="text-xl font-black uppercase tracking-tighter italic">
-            <span className="hidden lg:inline">TNMenu<span className="text-blue-500">_U60</span></span>
+            <span className="hidden lg:inline">EDU_QUIZ<span className="text-blue-500">List</span></span>
             <span className="lg:hidden text-blue-500">EQ</span>
           </h2>
         </div>
         <nav className="flex-1 p-2 lg:p-4 space-y-1 mt-4">
           {[
             { id: 'quizzes', icon: LayoutDashboard, label: 'Đề thi' },
+            { id: 'teachers', icon: ShieldCheck, label: 'Giáo viên', locked: !isSuperAdmin },
             { id: 'classes', icon: GraduationCap, label: 'Lớp học' },
             { id: 'ai', icon: Sparkles, label: 'AI Soạn đề' },
             { id: 'students', icon: Users, label: 'Học sinh' },
@@ -1046,44 +1390,96 @@ export default function AdminDashboard() {
             { id: 'monitor', icon: ShieldAlert, label: 'Giám sát' },
             { id: 'chapters', icon: FolderTree, label: 'Chương' },
             { id: 'bank', icon: Database, label: 'Ngân hàng' },
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => { setActiveTab(tab.id as AdminTab); setIsEditingQuiz(false); }}
-              className={`w-full flex items-center justify-center lg:justify-start gap-3 px-4 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-white/5'}`}
-            >
-              <tab.icon size={18}/> <span className="hidden lg:inline">{tab.label}</span>
-            </button>
-          ))}
+            { id: 'database', icon: Server, label: 'CSDL & Băng thông', locked: !isSuperAdmin },
+          ].map(tab => {
+            const isLocked = Boolean(tab.locked);
+            return (
+              <button
+                key={tab.id}
+                onClick={() => {
+                  if (isLocked) {
+                    showAlert("Quyền hạn", `Chức năng "${tab.label}" chỉ dành riêng cho Tổng Quản Trị (SuperAdmin).`, "warning");
+                    return;
+                  }
+                  setActiveTab(tab.id as AdminTab);
+                  setIsEditingQuiz(false);
+                }}
+                className={`w-full flex items-center justify-between lg:justify-start gap-3 px-4 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${
+                  isLocked
+                    ? 'opacity-35 cursor-not-allowed text-slate-500 hover:bg-transparent'
+                    : activeTab === tab.id
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'text-slate-400 hover:bg-white/5'
+                }`}
+                title={isLocked ? "Chức năng chỉ dành cho SuperAdmin" : undefined}
+              >
+                <div className="flex items-center gap-3">
+                  <tab.icon size={18}/> 
+                  <span className="hidden lg:inline">{tab.label}</span>
+                </div>
+                {isLocked && (
+                  <span className="hidden lg:inline-flex px-1.5 py-0.5 bg-slate-800 border border-slate-700 text-[8px] font-bold text-slate-400 rounded">
+                    Khóa
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </nav>
         
-        <div className="p-2 lg:p-4 border-t border-white/10 mt-auto">
-          <button
-            onClick={() => loadTabData(activeTab, true)}
-            disabled={isDataLoading}
-            title="Tải lại toàn bộ dữ liệu mới nhất từ Cloud"
-            className="w-full flex items-center justify-center lg:justify-start gap-3 px-4 py-3 rounded-xl text-[10px] font-black uppercase text-slate-400 hover:text-white hover:bg-white/5 transition-all"
-          >
-            <RefreshCw size={18} className={isDataLoading ? "animate-spin text-blue-400" : ""} />
-            <span className="hidden lg:inline">Làm mới Cloud</span>
-          </button>
+        {/* User Info & Teaching Subject Selector */}
+        <div className="p-3 lg:p-4 border-t border-white/10 space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center font-black text-xs shrink-0 shadow-sm">
+              {currentUser?.fullName ? currentUser.fullName.charAt(0).toUpperCase() : 'A'}
+            </div>
+            <div className="hidden lg:block overflow-hidden">
+              <p className="text-xs font-black truncate">{currentUser?.fullName || 'Super Admin'}</p>
+              <p className="text-[9px] font-bold text-blue-400 uppercase tracking-wider">{isSuperAdmin ? 'Tổng Quản Trị' : 'Giáo Viên'}</p>
+            </div>
+          </div>
+          
+          <div className="hidden lg:block bg-white/5 p-2.5 rounded-xl border border-white/10 space-y-1.5">
+            <label className="text-[9px] font-black uppercase text-slate-400 flex items-center gap-1.5">
+              <BookOpen size={11} className="text-blue-400"/> Môn giảng dạy:
+            </label>
+            {isSuperAdmin ? (
+              <select
+                value={mySubject}
+                onChange={(e) => handleUpdateMySubject(e.target.value)}
+                className="w-full bg-slate-800 text-white text-[11px] font-bold rounded-lg px-2.5 py-1.5 border border-white/15 outline-none focus:border-blue-500 transition-colors cursor-pointer"
+                title="Super Admin: Chọn môn giảng dạy để lọc và gán đề"
+              >
+                {STANDARD_SUBJECTS.map(subj => (
+                  <option key={subj} value={subj}>Môn {subj}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-white/10 flex items-center justify-between">
+                <span className="text-white text-xs font-black uppercase tracking-wider">
+                  Môn {mySubject || currentUser?.subject || 'Toán'}
+                </span>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="Môn đã liên kết với tài khoản" />
+              </div>
+            )}
+          </div>
         </div>
       </aside>
 
       <main 
-        ref={mainScrollRef}
-        tabIndex={-1}
-        onClick={handleMainClick}
-        className="flex-1 h-screen overflow-y-auto custom-scrollbar bg-slate-50 outline-none focus:outline-none"
+        id="admin-main-scroll" 
+        tabIndex={0} 
+        data-scroll-container="true" 
+        className="flex-1 h-full overflow-y-auto custom-scrollbar bg-slate-50 flex flex-col justify-between outline-none focus:outline-none focus:ring-0"
       >
-        <div className="p-4 lg:p-8 max-w-[1600px] mx-auto">
+        <div className="p-4 lg:p-8 max-w-[1600px] mx-auto flex-1 w-full">
           {!dbConnected && (
             <div className="mb-8 bg-red-50 border-2 border-red-100 p-8 rounded-[3rem] shadow-sm flex flex-col md:flex-row items-center justify-between gap-6 animate-pulse">
                 <div className="flex items-center gap-5">
                     <div className="p-4 bg-red-600 text-white rounded-[1.5rem] shadow-lg"><AlertTriangle size={28}/></div>
                     <div>
                         <h4 className="text-red-900 font-black uppercase text-sm">Hệ thống đang mất kết nối Database</h4>
-                        <p className="text-red-700 text-[10px] font-bold uppercase tracking-tight mt-1 leading-tight">Bạn không thể tải dữ liệu từ Cloud. Vui lòng sử dụng file CSV đã export từ Supabase để xem tạm thời.</p>
+                        <p className="text-red-700 text-[10px] font-bold uppercase tracking-tight mt-1 leading-tight">Bạn không thể tải dữ liệu từ Cloud. Vui lòng sử dụng file CSV để xem hoặc nạp dữ liệu tạm thời.</p>
                     </div>
                 </div>
                 <div className="flex gap-3">
@@ -1096,7 +1492,12 @@ export default function AdminDashboard() {
           )}
 
           {activeTab === 'quizzes' && (
-            isEditingQuiz ? (
+            isFetchingQuizDetail ? (
+              <div className="py-20 text-center">
+                <Loader2 className="animate-spin mx-auto text-blue-500" size={40}/>
+                <p className="mt-4 text-[10px] font-black uppercase text-slate-400">Đang nạp dữ liệu câu hỏi đề thi...</p>
+              </div>
+            ) : isEditingQuiz ? (
               <>
                 {isSavingInProgress && (
                     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[3000] flex items-center justify-center">
@@ -1109,18 +1510,20 @@ export default function AdminDashboard() {
                 <QuizEditor
                     editingId={editingQuizId} title={quizTitle} setTitle={setQuizTitle}
                     grade={quizGrade} setGrade={setQuizGrade} quizType={quizType} setQuizType={setQuizType}
+                    maxAttempts={quizMaxAttempts} setMaxAttempts={setQuizMaxAttempts}
                     academicYear={quizAcademicYear} setAcademicYear={setQuizAcademicYear}
+                    subject={quizSubject} setSubject={setQuizSubject}
                     isPublished={isPublished} setIsPublished={setIsPublished} isMonitored={isMonitored} setIsMonitored={setIsMonitored}
+                    showResultAnswers={showResultAnswers} setShowResultAnswers={setShowResultAnswers}
                     isUnlisted={isUnlisted} setIsUnlisted={setIsUnlisted}
+                    isSharedWithTeachers={isSharedWithTeachers} setIsSharedWithTeachers={setIsSharedWithTeachers}
                     targetType={targetType} setTargetType={setTargetType}
                     assignedClassIds={assignedClassIds} setAssignedClassIds={setAssignedClassIds}
-                    classes={classes}
-                    maxAttempts={maxAttempts} setMaxAttempts={setMaxAttempts}
-                    allowReview={allowReview} setAllowReview={setAllowReview}
+                    classes={accessibleClasses}
                     duration={duration} setDuration={setDuration} category={category} setCategory={setCategory}
                     orderIndex={orderIndex} setOrderIndex={setOrderIndex}
                     startTime={startTime} setStartTime={setStartTime} endTime={endTime} setEndTime={setEndTime}
-                    questions={questions} setQuestions={setQuestions} chapters={chapters} onSave={handleSaveQuiz}
+                    questions={questions} setQuestions={setQuestions} chapters={accessibleChapters} onSave={handleSaveQuiz}
                     onCleanLabels={handleCleanLabels}
                     onOpenBank={(type) => { 
                         setBTypeFilter(type); 
@@ -1129,70 +1532,158 @@ export default function AdminDashboard() {
                         setIsBankOpen(true); 
                     }}
                     onPdfExtract={handlePdfExtract} onTextExtract={handleTextExtract} onUploadImage={handleUploadImage} uploadingId={uploadingId} isAiLoading={isAiLoading}
+                    isSuperAdmin={isSuperAdmin}
+                    customApiKey={customApiKey}
+                    onApiKeyChange={handleApiKeyChange}
                 />
               </>
             ) : (
               <div className="space-y-6">
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                    <h1 className="text-xl font-black text-slate-800 uppercase italic">QUẢN LÝ ĐỀ THI</h1>
-                   <div className="flex gap-3">
+                   <div className="flex flex-wrap items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setIsApiKeyModalOpen(true)}
+                        className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl font-black uppercase text-[10px] border transition-all shadow-sm active:scale-95 ${
+                          customApiKey 
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' 
+                            : 'bg-white border-2 border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'
+                        }`}
+                        title="Cấu hình Gemini API Key cho AI soạn đề"
+                      >
+                        <Key size={14} className={customApiKey ? "text-emerald-600" : "text-slate-400"} />
+                        <span>{customApiKey ? "Key riêng: Đang bật" : "Gemini API Key"}</span>
+                        {customApiKey && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse ml-0.5"></span>}
+                      </button>
+
                       <button 
                         onClick={handleSyncAllQuizzes} 
                         disabled={isSyncing}
-                        className="flex items-center gap-2 px-5 py-3 bg-white border-2 border-slate-200 text-slate-500 rounded-xl font-black uppercase text-[10px] shadow-sm hover:bg-slate-50 transition-all disabled:opacity-50"
+                        className="flex items-center gap-2 px-4 py-2.5 bg-white border-2 border-slate-200 text-slate-500 rounded-xl font-black uppercase text-[10px] shadow-sm hover:bg-slate-50 transition-all disabled:opacity-50"
+                        title="Đồng bộ lại số lượng câu hỏi trong mỗi đề"
                       >
-                         {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <RefreshCw size={16}/>}
+                         {isSyncing ? <Loader2 className="animate-spin" size={15}/> : <RefreshCw size={15}/>}
                          CẬP NHẬT SỐ CÂU
                       </button>
-                      <button onClick={handleCreateQuiz} className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg hover:bg-black transition-all">
+                      <button onClick={handleCreateQuiz} className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg hover:bg-black transition-all">
                           <Plus size={16}/> TẠO ĐỀ MỚI
                       </button>
                    </div>
                 </div>
-                {isDataLoading ? (
+                {isDataLoading && quizzes.length === 0 ? (
                     <div className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-blue-500" size={40}/><p className="mt-4 text-[10px] font-black uppercase text-slate-400">Đang tải Cloud...</p></div>
                 ) : (
                     <QuizList 
-                        quizzes={quizzes} results={results} chapters={chapters} classes={classes}
+                        quizzes={accessibleQuizzes} results={accessibleResults} chapters={accessibleChapters} classes={accessibleClasses}
+                        currentUser={currentUser} teachers={teachers}
                         onEdit={handleEditQuiz} onDelete={handleDeleteQuiz} onPreview={handlePreviewQuiz}
-                        onQuickAssignTarget={handleQuickAssignTarget}
-                        onToggleAllowReview={handleToggleAllowReview}
-                        onQuickUpdateAcademicYear={handleQuickUpdateAcademicYear}
-                        qAcademicYearFilter={qAcademicYearFilter} setQAcademicYearFilter={setQAcademicYearFilter}
+                        onAssignClasses={handleAssignClasses}
                         qSearch={qSearch} setQSearch={setQSearch} qGradeFilter={qGradeFilter} setQGradeFilter={setQGradeFilter}
                         qChapterFilter={qChapterFilter} setQChapterFilter={setQChapterFilter}
+                        qSubjectFilter={qSubjectFilter} setQSubjectFilter={setQSubjectFilter}
+                        qAcademicYearFilter={qAcademicYearFilter} setQAcademicYearFilter={setQAcademicYearFilter}
                     />
                 )}
               </div>
             )
           )}
 
+          {activeTab === 'teachers' && (
+            <TeacherManager
+              teachers={teachers}
+              quizzes={quizzes}
+              classes={classes}
+              currentUser={currentUser}
+              onSaveTeacher={async (t) => {
+                setTeachers(prev => {
+                  const idx = prev.findIndex(item => item.id === t.id);
+                  if (idx >= 0) {
+                    const copy = [...prev];
+                    copy[idx] = t;
+                    return copy;
+                  }
+                  return [t, ...prev];
+                });
+                await saveTeacher(t);
+                showAlert("Thành công", `Đã lưu tài khoản giáo viên ${t.fullName}! Tên giáo viên trên các lớp học và đề thi liên quan đã được đồng bộ tự động.`, "success");
+                await Promise.all([
+                  loadTabData('teachers', true),
+                  loadTabData('classes', true)
+                ]);
+              }}
+              onDeleteTeacher={async (id, name) => {
+                showConfirm(
+                  "Xác nhận xóa tài khoản giáo viên",
+                  `Bạn có chắc chắn muốn xóa tài khoản giáo viên "${name}" không? Thao tác này không thể hoàn tác.`,
+                  async () => {
+                    setTeachers(prev => prev.filter(t => t.id !== id));
+                    await deleteTeacher(id);
+                    showAlert("Thành công", `Đã xóa tài khoản giáo viên "${name}"!`, "success");
+                    await loadTabData('teachers', true);
+                  }
+                );
+              }}
+              onResetPassword={async (t) => {
+                const success = await changePassword(t.id, '123');
+                if (success) {
+                  showAlert("Thành công", `Đã đặt lại mật khẩu cho giáo viên ${t.fullName} về mặc định "123"!`, "success");
+                  await loadTabData('teachers', true);
+                } else {
+                  showAlert("Lỗi", "Không thể đặt lại mật khẩu giáo viên", "error");
+                }
+              }}
+              onRefresh={() => loadTabData('teachers', true)}
+            />
+          )}
+
           {activeTab === 'classes' && (
             <ClassManager 
-              classes={classes}
-              students={students}
-              quizzes={quizzes}
-              results={results}
-              chapters={chapters}
+              classes={accessibleClasses}
+              students={accessibleStudents}
+              quizzes={accessibleQuizzes}
+              results={accessibleResults}
+              chapters={accessibleChapters}
+              currentUser={currentUser}
+              teachers={teachers}
               onSaveClass={async (c) => {
-                await saveClass(c);
-                await loadTabData('classes');
+                const classToSave: ClassRoom = {
+                  ...c,
+                  createdBy: c.createdBy || currentUser?.id || '',
+                  teacherName: c.teacherName || currentUser?.fullName || ''
+                };
+                setClasses(prev => {
+                  const idx = prev.findIndex(item => item.id === classToSave.id);
+                  if (idx >= 0) {
+                    const copy = [...prev];
+                    copy[idx] = classToSave;
+                    return copy;
+                  }
+                  return [classToSave, ...prev];
+                });
+                await saveClass(classToSave);
+                await loadTabData('classes', true);
               }}
               onDeleteClass={async (id, name) => {
                 showConfirm(
                   "Xác nhận xóa lớp học",
                   `Bạn có chắc chắn muốn xóa lớp "${name}" không? Học sinh thuộc lớp này sẽ không bị xóa khỏi hệ thống mà chỉ gỡ liên kết lớp.`,
                   async () => {
+                    setClasses(prev => prev.filter(item => item.id !== id));
                     await deleteClass(id);
-                    await loadTabData('classes');
+                    await loadTabData('classes', true);
                   }
                 );
               }}
               onAssignStudents={async (studentIds, classInfo) => {
                 await assignStudentsToClass(studentIds, classInfo);
-                await loadTabData('classes');
+                await loadTabData('classes', true);
+                await loadTabData('students', true);
               }}
-              onRefresh={() => loadTabData('classes')}
+              onRefresh={() => {
+                loadTabData('classes', true);
+                loadTabData('students', true);
+              }}
             />
           )}
 
@@ -1205,6 +1696,9 @@ export default function AdminDashboard() {
                     onGenerate={handleAiGenerate}
                     isLoading={isAiLoading}
                     hasQuestionsInEditor={questions.length > 0}
+                    customApiKey={customApiKey}
+                    onApiKeyChange={handleApiKeyChange}
+                    isSuperAdmin={isSuperAdmin}
                 />
             </div>
           )}
@@ -1212,21 +1706,23 @@ export default function AdminDashboard() {
           {activeTab === 'students' && (
             <div className="space-y-6">
                 <h1 className="text-xl font-black text-slate-800 uppercase italic">DANH SÁCH HỌC SINH</h1>
-                {isDataLoading && students.length === 0 ? (
+                {isDataLoading && accessibleStudents.length === 0 ? (
                     <div className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-blue-500" size={40}/><p className="mt-4 text-[10px] font-black uppercase text-slate-400">Đang tải...</p></div>
                 ) : (
                     <StudentManager 
-                        students={students} results={results} quizzes={quizzes} classes={classes}
+                        students={accessibleStudents} results={accessibleResults} quizzes={accessibleQuizzes} classes={accessibleClasses}
+                        teachers={teachers}
+                        currentUser={currentUser}
                         sSearch={sSearch} setSSearch={setSSearch} sGradeFilter={sGradeFilter} setSGradeFilter={setSGradeFilter}
                         onRefresh={() => loadTabData('students')}
-                        onAdd={() => { setSelectedStudent(null); setStudentForm({fullName: '', studentCode: '', grade: '12', password: '123', classId: '', className: '', academicYear: ''}); setIsStudentModalOpen(true); }}
+                        onAdd={() => { setSelectedStudent(null); setStudentForm({fullName: '', studentCode: '', grade: '12', password: '123', classId: '', className: '', academicYear: '', subject: currentUser?.subject || ''}); setIsStudentModalOpen(true); }}
                         onImportCsv={handleImportCsv} onViewDetail={setViewingStudent}
-                        onEdit={(u) => { setSelectedStudent(u); setStudentForm({fullName: u.fullName, studentCode: u.studentCode || '', grade: u.grade || '12', password: u.password, classId: u.classId || '', className: u.className || '', academicYear: u.academicYear || ''}); setIsStudentModalOpen(true); }}
+                        onEdit={(u) => { setSelectedStudent(u); setStudentForm({fullName: u.fullName, studentCode: u.studentCode || '', grade: u.grade || '12', password: u.password, classId: u.classId || '', className: u.className || '', academicYear: u.academicYear || '', subject: u.subject || ''}); setIsStudentModalOpen(true); }}
                         onDelete={handleDeleteStudent} 
                         onBulkDelete={handleDeleteStudentsBatch}
                         onResetPassword={handleResetPassword}
                         onBulkAssignClass={handleBulkAssignClass}
-                        totalCount={studentsTotal}
+                        totalCount={accessibleStudents.length}
                         onLoadMore={handleLoadMoreStudents}
                         isMoreLoading={isDataLoading}
                     />
@@ -1241,7 +1737,8 @@ export default function AdminDashboard() {
                     <div className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-blue-500" size={40}/><p className="mt-4 text-[10px] font-black uppercase text-slate-400">Đang tải...</p></div>
                 ) : (
                     <ResultsBoard 
-                        results={results} quizzes={quizzes} users={students} chapters={chapters}
+                        results={accessibleResults} quizzes={accessibleQuizzes} users={accessibleStudents} chapters={accessibleChapters}
+                        classes={accessibleClasses} teachers={teachers} currentUser={currentUser}
                         rGradeFilter={rGradeFilter} setRGradeFilter={setRGradeFilter}
                         rChapterFilter={rChapterFilter} setRChapterFilter={setRChapterFilter}
                         rQuizFilter={rQuizFilter} setRQuizFilter={setRQuizFilter}
@@ -1259,39 +1756,143 @@ export default function AdminDashboard() {
              </div>
           )}
 
-          {activeTab === 'monitor' && <ExamMonitor />}
+          {activeTab === 'monitor' && <ExamMonitor currentUser={currentUser} />}
           {activeTab === 'chapters' && (
-            <ChapterManager chapters={chapters} onSave={async (c) => { await saveChapter(c); loadTabData('chapters'); }} onDelete={async (id) => { await deleteChapter(id); loadTabData('chapters'); }} />
+            <ChapterManager 
+              chapters={chapters} 
+              currentUser={currentUser}
+              isSuperAdmin={isSuperAdmin}
+              onSave={async (c) => { 
+                setChapters(prev => {
+                  const idx = prev.findIndex(item => item.id === c.id);
+                  if (idx >= 0) {
+                    const copy = [...prev];
+                    copy[idx] = c;
+                    return copy;
+                  }
+                  return [...prev, c];
+                });
+                await saveChapter(c); 
+                loadTabData('chapters'); 
+              }} 
+              onDelete={async (id) => { 
+                setChapters(prev => prev.filter(c => c.id !== id));
+                await deleteChapter(id); 
+                loadTabData('chapters'); 
+              }} 
+              onDeleteBatch={async (ids) => {
+                const idSet = new Set(ids);
+                setChapters(prev => prev.filter(c => !idSet.has(c.id)));
+                await deleteChaptersBatch(ids);
+                loadTabData('chapters');
+              }}
+            />
           )}
           {activeTab === 'bank' && (
             <div className="space-y-6">
-                <div className="flex justify-between items-center">
-                   <h1 className="text-xl font-black text-slate-800 uppercase italic">NGÂN HÀNG CÂU HỎI</h1>
-                   <button 
-                      onClick={() => handleSyncBank(false)} 
-                      disabled={isSyncing}
-                      className="flex items-center gap-2 px-5 py-3 bg-white border-2 border-slate-200 text-blue-600 rounded-xl font-black uppercase text-[10px] shadow-sm hover:bg-blue-50 transition-all disabled:opacity-50"
-                   >
-                      {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <RefreshCw size={16}/>}
-                      CẬP NHẬT TỪ ĐỀ THI
-                   </button>
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                   <div>
+                     <h1 className="text-xl font-black text-slate-800 uppercase italic">NGÂN HÀNG CÂU HỎI</h1>
+                     <p className="text-xs text-slate-400 font-medium">Kho dữ liệu câu hỏi dùng chung & đồng bộ chống trùng lặp thông minh</p>
+                   </div>
+                   {isSuperAdmin && (
+                     <div className="flex flex-wrap items-center gap-2">
+                       <button 
+                          onClick={handleDeduplicateBank} 
+                          disabled={isSyncing}
+                          className="flex items-center gap-2 px-4 py-2.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl font-black uppercase text-[10px] shadow-sm hover:bg-amber-100 transition-all disabled:opacity-50"
+                          title="Quét và gộp các câu hỏi bị trùng lặp trong Ngân hàng"
+                       >
+                          {isSyncing ? <Loader2 className="animate-spin" size={14}/> : <Sparkles size={14} className="text-amber-600"/>}
+                          QUÉT & GỘP TRÙNG LẶP {bSubjectFilter !== 'all' ? `(${bSubjectFilter})` : ''}
+                       </button>
+                       <button 
+                          onClick={handleSyncBank} 
+                          disabled={isSyncing}
+                          className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] shadow-sm hover:bg-blue-700 transition-all disabled:opacity-50"
+                          title="Đồng bộ câu hỏi từ các đề thi vào Ngân hàng (chống trùng lặp)"
+                       >
+                          {isSyncing ? <Loader2 className="animate-spin" size={14}/> : <RefreshCw size={14}/>}
+                          CẬP NHẬT TỪ ĐỀ THI {bSubjectFilter !== 'all' ? `(${bSubjectFilter})` : ''}
+                       </button>
+                     </div>
+                   )}
                 </div>
-                {isDataLoading ? (
+                {isDataLoading && accessibleBankQuestions.length === 0 ? (
                     <div className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-blue-500" size={40}/><p className="mt-4 text-[10px] font-black uppercase text-slate-400">Đang tải...</p></div>
                 ) : (
                     <QuestionBank 
-                        questions={allAvailableQuestions} chapters={chapters} bGradeFilter={bGradeFilter} setBGradeFilter={setBGradeFilter}
+                        questions={accessibleBankQuestions} 
+                        chapters={accessibleChapters} 
+                        bGradeFilter={bGradeFilter} setBGradeFilter={setBGradeFilter}
                         bChapterFilter={bChapterFilter} setBChapterFilter={setBChapterFilter}
-                        bTypeFilter={bTypeFilter} setBTypeFilter={setBTypeFilter} bSearch={bSearch} setBSearch={setBSearch}
-                        onAddMultiple={(qs) => { 
-                        setQuestions(prev => [...prev, ...qs]); 
-                        setActiveTab('quizzes'); 
-                        setIsEditingQuiz(true); 
-                    }}
+                        bTypeFilter={bTypeFilter} setBTypeFilter={setBTypeFilter} 
+                        bSearch={bSearch} setBSearch={setBSearch}
+                        currentUser={currentUser}
+                        isSuperAdmin={isSuperAdmin}
+                        bSubjectFilter={bSubjectFilter}
+                        setBSubjectFilter={setBSubjectFilter}
+                        onAddMultiple={(qs) => { setQuestions([...questions, ...qs]); setActiveTab('quizzes'); setIsEditingQuiz(true); }}
+                        onDeleteQuestion={handleDeleteBankQuestion}
+                        onDeleteBatchQuestions={handleDeleteBatchBankQuestions}
+                        onDeduplicate={handleDeduplicateBank}
+                        isDeduplicating={isSyncing}
                     />
                 )}
             </div>
           )}
+
+          {activeTab === 'database' && (
+            <DatabaseMonitor
+              isSuperAdmin={isSuperAdmin}
+              onShowAlert={showAlert}
+              onShowConfirm={showConfirm}
+            />
+          )}
+        </div>
+
+        {/* Footer inside the scrollable main container */}
+        <footer className="bg-white border-t mt-auto py-4 text-center text-gray-500 text-xs shrink-0">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between px-6 gap-3">
+            <span>© 2026 EduQuiz NHC. LH Thạnh 0909091634</span>
+            <div className="flex flex-wrap justify-center gap-3">
+              <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase border ${dbConnected ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                <Database size={12}/> {dbConnected ? 'Cloud: lchfhsio...' : 'DB Offline'}
+              </div>
+              <div 
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase border cursor-help ${isAIReady ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-red-50 text-red-700 border-red-200'}`}
+                title={isAIReady ? "Hệ thống AI đã sẵn sàng" : "Thiếu API_KEY hoặc cần Redeploy lại trên Vercel"}
+              >
+                <Sparkles size={12}/> {isAIReady ? 'AI Ready' : 'AI No Key'}
+              </div>
+            </div>
+          </div>
+        </footer>
+
+        {/* Floating Quick-Scroll Buttons cho chuột và bàn phím (Admin Dashboard, Ngân hàng, Soạn đề) */}
+        <div className="fixed bottom-6 right-6 z-40 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              const el = document.getElementById('admin-main-scroll');
+              el?.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            title="Cuộn lên đầu trang (Phím mũi tên lên / PageUp)"
+            className="w-11 h-11 bg-white/95 backdrop-blur-md text-slate-700 hover:text-blue-600 rounded-2xl border-2 border-slate-200 shadow-xl flex items-center justify-center hover:bg-blue-50 transition-all active:scale-95 group"
+          >
+            <ChevronUp size={20} className="group-hover:-translate-y-0.5 transition-transform" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const el = document.getElementById('admin-main-scroll');
+              el?.scrollBy({ top: 500, behavior: 'smooth' });
+            }}
+            title="Cuộn xuống (Phím mũi tên xuống / PageDown)"
+            className="w-11 h-11 bg-white/95 backdrop-blur-md text-slate-700 hover:text-blue-600 rounded-2xl border-2 border-slate-200 shadow-xl flex items-center justify-center hover:bg-blue-50 transition-all active:scale-95 group"
+          >
+            <ChevronDown size={20} className="group-hover:translate-y-0.5 transition-transform" />
+          </button>
         </div>
       </main>
 
@@ -1302,21 +1903,22 @@ export default function AdminDashboard() {
           student={selectedStudent} 
           form={studentForm} 
           setForm={setStudentForm} 
-          classes={classes}
+          classes={accessibleClasses}
+          currentUser={currentUser}
           onClose={() => setIsStudentModalOpen(false)} 
           onSave={handleSaveStudent} 
           isSaving={isSavingStudent} 
           isDuplicate={students.some(s => s.studentCode === studentForm.studentCode.trim().toUpperCase() && s.id !== selectedStudent?.id)}
         />
       )}
-      {viewingStudent && <StudentDetailModal student={viewingStudent} results={results} quizzes={quizzes} onClose={() => setViewingStudent(null)} onViewResult={handleViewResultDetail} />}
+      {viewingStudent && <StudentDetailModal student={viewingStudent} results={accessibleResults} quizzes={accessibleQuizzes} onClose={() => setViewingStudent(null)} onViewResult={handleViewResultDetail} />}
       {historyData && <ResultHistoryModal isOpen={true} {...historyData} onClose={() => setHistoryData(null)} onViewDetail={handleViewResultDetail} onDeleteOne={(r) => deleteResult(r.id).then(() => loadTabData('results'))} />}
       {selectedResultDetail && <ResultDetailModal isOpen={true} result={selectedResultDetail.result} quiz={selectedResultDetail.quiz} onClose={() => setSelectedResultDetail(null)} />}
       {previewQuiz && <QuizPreviewModal quiz={previewQuiz} onClose={() => setPreviewQuiz(null)} />}
       
       {isBankOpen && (
         <div className="fixed inset-0 bg-slate-900/40 z-[2000] flex items-stretch justify-end">
-             <div className="bg-white w-full h-full flex flex-col overflow-hidden shadow-2xl">
+             <div className="bg-white w-full h-full flex flex-col overflow-hidden shadow-2xl relative">
                 <div className="px-4 py-2 bg-slate-900 text-white flex justify-between items-center border-b border-white/5">
                     <div className="flex items-center gap-2">
                         <Database size={16} className="text-blue-500"/>
@@ -1326,7 +1928,12 @@ export default function AdminDashboard() {
                         <span>Đóng</span> <X size={14}/>
                     </button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 bg-slate-50 custom-scrollbar">
+                <div 
+                  id="modal-bank-scroll" 
+                  tabIndex={0} 
+                  data-scroll-container="true" 
+                  className="flex-1 overflow-y-auto p-4 bg-slate-50 custom-scrollbar outline-none focus:outline-none"
+                >
                     {isBankLoading ? (
                         <div className="py-20 text-center">
                             <Loader2 className="animate-spin mx-auto text-blue-500" size={40}/>
@@ -1334,20 +1941,147 @@ export default function AdminDashboard() {
                         </div>
                     ) : (
                         <QuestionBank 
-                            questions={allAvailableQuestions} 
-                            chapters={chapters}
+                            questions={accessibleBankQuestions} 
+                            chapters={accessibleChapters} 
                             bGradeFilter={bGradeFilter} setBGradeFilter={setBGradeFilter}
                             bChapterFilter={bChapterFilter} setBChapterFilter={setBChapterFilter}
                             bTypeFilter={bTypeFilter} setBTypeFilter={setBTypeFilter}
                             bSearch={bSearch} setBSearch={setBSearch}
-                            onAddMultiple={(qs) => { 
-                                setQuestions(prev => [...prev, ...qs]); 
-                                setIsBankOpen(false); 
-                            }}
+                            currentUser={currentUser}
+                            isSuperAdmin={isSuperAdmin}
+                            bSubjectFilter={bSubjectFilter}
+                            setBSubjectFilter={setBSubjectFilter}
+                            onAddMultiple={(qs) => { setQuestions([...questions, ...qs]); setIsBankOpen(false); }}
+                            onDeleteQuestion={handleDeleteBankQuestion}
+                            onDeleteBatchQuestions={handleDeleteBatchBankQuestions}
+                            onDeduplicate={handleDeduplicateBank}
+                            isDeduplicating={isSyncing}
                         />
                     )}
                 </div>
+
+                {/* Nút cuộn nhanh bên trong Modal Ngân hàng */}
+                <div className="absolute bottom-6 right-6 z-40 flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const el = document.getElementById('modal-bank-scroll');
+                      el?.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    title="Cuộn lên đầu"
+                    className="w-10 h-10 bg-white/95 backdrop-blur-md text-slate-700 hover:text-blue-600 rounded-xl border border-slate-300 shadow-xl flex items-center justify-center hover:bg-blue-50 transition-all active:scale-95"
+                  >
+                    <ChevronUp size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const el = document.getElementById('modal-bank-scroll');
+                      el?.scrollBy({ top: 450, behavior: 'smooth' });
+                    }}
+                    title="Cuộn xuống"
+                    className="w-10 h-10 bg-white/95 backdrop-blur-md text-slate-700 hover:text-blue-600 rounded-xl border border-slate-300 shadow-xl flex items-center justify-center hover:bg-blue-50 transition-all active:scale-95"
+                  >
+                    <ChevronDown size={18} />
+                  </button>
+                </div>
              </div>
+        </div>
+      )}
+
+      {/* Gemini API Key Configuration Modal */}
+      {isApiKeyModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[5000] flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white max-w-lg w-full rounded-[2.5rem] border-4 border-white shadow-2xl p-8 overflow-hidden animate-scale-up space-y-6">
+            <div className="flex items-center justify-between border-b pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl">
+                  <Key size={22} />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-800 uppercase tracking-tight text-base">Cấu hình Gemini API Key</h3>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">Dùng cho AI soạn đề & bóc tách PDF / Văn bản</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsApiKeyModalOpen(false)}
+                className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                  Mã API Key (AI Studio)
+                </label>
+                {customApiKey ? (
+                  <span className="text-[9px] font-black uppercase text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 flex items-center gap-1">
+                    <Check size={10} /> Đang dùng Key riêng
+                  </span>
+                ) : (
+                  <span className="text-[9px] font-bold uppercase text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md">
+                    {isSuperAdmin ? 'Đang dùng Key mặc định' : 'Chưa cài Key'}
+                  </span>
+                )}
+              </div>
+
+              <div className="relative flex items-center">
+                <input
+                  type={showApiKey ? "text" : "password"}
+                  placeholder={isSuperAdmin ? "Mặc định dùng Key hệ thống (nhập để đổi)..." : "Dán mã AI Studio API Key vào đây..."}
+                  value={customApiKey}
+                  onChange={(e) => handleApiKeyChange(e.target.value)}
+                  className="w-full bg-slate-50 border-2 border-slate-200 rounded-2xl px-4 py-3.5 pr-20 text-xs font-mono font-medium outline-none focus:border-blue-500 focus:bg-white transition-all text-slate-800"
+                />
+                <div className="absolute right-2 flex items-center gap-1">
+                  {customApiKey && (
+                    <button
+                      type="button"
+                      onClick={() => handleApiKeyChange('')}
+                      className="text-[9px] font-bold text-red-500 hover:bg-red-50 px-2 py-1 rounded transition-colors"
+                      title="Xóa Key"
+                    >
+                      Xóa
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    className="p-1.5 text-slate-400 hover:text-slate-700 transition-colors"
+                    title={showApiKey ? "Ẩn Key" : "Hiện Key"}
+                  >
+                    {showApiKey ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] pt-1">
+                <a 
+                  href="https://aistudio.google.com/app/apikey" 
+                  target="_blank" 
+                  rel="noreferrer"
+                  className="text-blue-600 hover:underline font-bold flex items-center gap-1"
+                >
+                  <Sparkles size={12} /> Lấy API Key miễn phí tại Google AI Studio
+                </a>
+              </div>
+            </div>
+
+            <div className="p-4 bg-blue-50/60 rounded-2xl border border-blue-100 text-[11px] text-slate-600 space-y-1">
+              <p className="font-bold text-blue-900">💡 Lưu ý quan trọng:</p>
+              <p>Key được lưu an toàn trên trình duyệt cá nhân của bạn. Không ảnh hưởng và không can thiệp đến tài khoản của các giáo viên khác.</p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsApiKeyModalOpen(false)}
+              className="w-full py-3.5 bg-slate-900 hover:bg-black text-white rounded-2xl text-xs font-black uppercase tracking-wider transition-all shadow-lg active:scale-95"
+            >
+              Lưu & Đóng
+            </button>
+          </div>
         </div>
       )}
 
