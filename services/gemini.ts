@@ -2,165 +2,60 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Question, Grade, QuestionLevel, SubQuestion } from "../types";
 import { v4 as uuidv4 } from 'uuid';
-import { normalizeFullText } from './vietnameseFixer';
+import { normalizeFullText, cleanLatexTextTags } from './vietnameseFixer';
 
-const cleanJsonString = (str: string): string => {
-    return str.replace(/```json/gi, "").replace(/```/gi, "").trim();
+export const cleanJsonString = (str: string): string => {
+    return str.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 };
 
-const removeVietnameseAccents = (str: string): string => {
-    return str
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/đ/g, 'd')
-        .replace(/Đ/g, 'D');
-};
+export const safeParseJsonWithLatex = (inputStr: string): any => {
+    if (!inputStr || typeof inputStr !== 'string') return null;
+    const cleanStr = cleanJsonString(inputStr);
 
-export const normalizeLevel = (val: any): QuestionLevel | undefined => {
-    if (val === undefined || val === null || val === '') return undefined;
-    const raw = String(val).trim().toUpperCase();
-    const clean = removeVietnameseAccents(raw).replace(/[^A-Z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
-    const compact = clean.replace(/\s+/g, '');
-
-    // 1. Mức 4: Vận dụng cao (VDC / High Apply / Expert / Advance)
-    if (
-        clean === 'VDC' || 
-        compact === 'VDC' ||
-        clean === '4' || 
-        clean === 'MUC 4' || 
-        compact === 'MUC4' ||
-        clean === 'LEVEL 4' || 
-        compact === 'LEVEL4' ||
-        clean === 'LV 4' || 
-        clean === 'LV4' ||
-        clean === 'L4' ||
-        clean.includes('VAN DUNG CAO') || 
-        compact.includes('VANDUNGCAO') ||
-        clean.includes('VD CAO') || 
-        compact.includes('VDCAO') ||
-        clean.includes('HIGH APPLY') ||
-        compact.includes('HIGHAPPLY') ||
-        clean.includes('HIGHER APPLY') ||
-        compact.includes('HIGHERAPPLY') ||
-        clean.includes('HIGH APPLICATION') ||
-        compact.includes('HIGHAPPLICATION') ||
-        clean.includes('HIGHER APPLICATION') ||
-        (clean.includes('HIGH') && (clean.includes('APPLY') || clean.includes('APP'))) ||
-        clean.includes('VERY HARD') || 
-        compact.includes('VERYHARD') ||
-        clean.includes('VHARD') ||
-        clean.includes('V HARD') ||
-        clean.includes('ADVANCED') || 
-        clean.includes('ADVANCE') || 
-        clean.includes('EXPERT') || 
-        clean.includes('CREATIVE') ||
-        clean.includes('CREATING') ||
-        clean.includes('EVALUATE') ||
-        clean.includes('EVALUATING')
-    ) {
-        return 'VDC';
+    // Thử parse trực tiếp
+    try {
+        return JSON.parse(cleanStr);
+    } catch (firstErr) {
+        // Nếu thất bại do các ký tự escape LaTeX (như \Delta, \frac, \text, \pm, \alpha, \s, \d...), sửa chữa tự động
+        try {
+            // Thay thế các ký tự escape không hợp lệ trong chuỗi JSON thành escape kép (\\)
+            // JSON chỉ cho phép escape: \" \\ \/ \b \f \n \r \t \uXXXX
+            const fixedEscape = cleanStr.replace(/\\([^"\\\/bfnrtu]|u(?![\da-fA-F]{4}))/g, '\\\\$1');
+            return JSON.parse(fixedEscape);
+        } catch (secondErr) {
+            // Thử dọn dẹp các ký tự điều khiển tab/newline ẩn
+            try {
+                const noInvalidCtrl = cleanStr
+                    .replace(/\r\n/g, "\\n")
+                    .replace(/\n/g, "\\n")
+                    .replace(/\t/g, "\\t");
+                return JSON.parse(noInvalidCtrl);
+            } catch (thirdErr: any) {
+                throw new Error("Cấu trúc file hoặc chuỗi JSON không hợp lệ: " + (firstErr as Error).message);
+            }
+        }
     }
+};
 
-    // 2. Mức 3: Vận dụng (VD / Apply / Application / Hard)
-    if (
-        clean === 'VD' || 
-        compact === 'VD' ||
-        clean === '3' || 
-        clean === 'MUC 3' || 
-        compact === 'MUC3' ||
-        clean === 'LEVEL 3' || 
-        compact === 'LEVEL3' ||
-        clean === 'LV 3' || 
-        clean === 'LV3' ||
-        clean === 'L3' ||
-        clean.includes('VAN DUNG') || 
-        compact.includes('VANDUNG') ||
-        clean.includes('APPLY') || 
-        compact.includes('APPLY') ||
-        clean.includes('APPLICATION') || 
-        compact.includes('APPLICATION') ||
-        clean.includes('APPLYING') ||
-        clean.includes('ANALYZE') ||
-        clean.includes('ANALYZING') ||
-        clean.includes('ANALYSIS') ||
-        clean.includes('HARD') || 
-        clean.includes('DIFFICULT')
-    ) {
+const normalizeLevel = (val: any): QuestionLevel | undefined => {
+    if (!val) return undefined;
+    const str = String(val).trim().toUpperCase();
+    if (str === 'B' || str === 'NB' || str.includes('NHẬN BIẾT') || str.includes('BIẾT') || str === 'EASY' || str.includes('KNOW')) return 'B';
+    if (str === 'H' || str === 'TH' || str.includes('THÔNG HIỂU') || str.includes('HIỂU') || str === 'MEDIUM' || str.includes('UNDERSTAND')) return 'H';
+    if (str === 'VD' || str.includes('VẬN DỤNG CAO') || str === 'VDC' || str === 'VERY HARD' || str === 'VHARD' || str.includes('ANALY') || str.includes('APPLY') || str === 'HARD') {
+        if (str === 'VDC' || str.includes('CAO') || str === 'VERY HARD' || str === 'VHARD' || str.includes('ANALY')) return 'VDC';
         return 'VD';
     }
-
-    // 3. Mức 2: Thông hiểu / Hiểu (H / TH / Understand / Understanding / Medium)
-    if (
-        clean === 'H' || 
-        clean === 'TH' || 
-        compact === 'TH' ||
-        clean === '2' || 
-        clean === 'MUC 2' || 
-        compact === 'MUC2' ||
-        clean === 'LEVEL 2' || 
-        compact === 'LEVEL2' ||
-        clean === 'LV 2' || 
-        clean === 'LV2' ||
-        clean === 'L2' ||
-        clean.includes('THONG HIEU') || 
-        compact.includes('THONGHIEU') ||
-        clean.includes('HIEU') || 
-        clean.includes('UNDERSTAND') || 
-        compact.includes('UNDERSTAND') ||
-        clean.includes('COMPREHEND') || 
-        clean.includes('COMPREHENSION') || 
-        clean.includes('MEDIUM') || 
-        clean.includes('MED') ||
-        clean.includes('MODERATE') || 
-        clean.includes('INTERMEDIATE') ||
-        clean.includes('AVERAGE')
-    ) {
-        return 'H';
-    }
-
-    // 4. Mức 1: Nhận biết / Biết (B / NB / Know / Knowledge / Remember / Easy)
-    if (
-        clean === 'B' || 
-        clean === 'NB' || 
-        compact === 'NB' ||
-        clean === '1' || 
-        clean === 'MUC 1' || 
-        compact === 'MUC1' ||
-        clean === 'LEVEL 1' || 
-        compact === 'LEVEL1' ||
-        clean === 'LV 1' || 
-        clean === 'LV1' ||
-        clean === 'L1' ||
-        clean.includes('NHAN BIET') || 
-        compact.includes('NHANBIET') ||
-        clean.includes('BIET') || 
-        clean.includes('KNOW') || 
-        compact.includes('KNOW') ||
-        clean.includes('REMEMBER') || 
-        compact.includes('REMEMBER') ||
-        clean.includes('RECOGN') || 
-        clean.includes('RECALL') ||
-        clean.includes('EASY') || 
-        clean.includes('EZ') ||
-        clean.includes('BASIC') || 
-        clean.includes('ELEMENTARY') ||
-        clean.includes('BEGINNER') ||
-        clean.includes('SIMPLE')
-    ) {
-        return 'B';
-    }
-
     return undefined;
 };
 
-export const extractLevelFromText = (text: string): { cleanText: string; level?: QuestionLevel } => {
+const extractLevelFromText = (text: string): { cleanText: string; level?: QuestionLevel } => {
     if (!text) return { cleanText: "" };
-    let cleanText = text;
+    let cleanText = cleanLatexTextTags(text);
     let level: QuestionLevel | undefined = undefined;
 
-    // Pattern: [B], (B), <B>, 【B】, [NB], [H], [TH], [VD], [VDC], [Nhận biết], [Thông hiểu], [Vận dụng], [Vận dụng cao], [Biết], [Hiểu], [Mức 1], [Mức 2], [Mức 3], [Mức 4]
-    const levelRegex = /(?:\[|\(|\<|【|\{)\s*(VDC|VD\s*CAO|VẬN\s*DỤNG\s*CAO|VAN\s*DUNG\s*CAO|VD|VẬN\s*DỤNG|VAN\s*DUNG|TH|THÔNG\s*HIỂU|THONG\s*HIEU|H|HIỂU|HIEU|NB|NHẬN\s*BIẾT|NHAN\s*BIET|B|BIẾT|BIET|MỨC\s*[1-4]|MUC\s*[1-4]|LEVEL\s*[1-4])\s*(?:\]|\)|\>|】|\})/i;
-    
+    // Pattern: [B], (B), <B>, [NB], [H], [TH], [VD], [VDC] at start or inside
+    const levelRegex = /(?:\[|\(|\<)\s*(B|NB|H|TH|VD|VDC|Nhận biết|Thông hiểu|Vận dụng cao|Vận dụng|Biết|Hiểu)\s*(?:\]|\)|\>)/i;
     const match = cleanText.match(levelRegex);
     if (match) {
         level = normalizeLevel(match[1]);
@@ -171,7 +66,7 @@ export const extractLevelFromText = (text: string): { cleanText: string; level?:
 
 const stripOptionLabel = (text: string): string => {
     if (!text) return "";
-    // Chuẩn hóa dấu tiếng Việt và LaTeX trước
+    // Chuẩn hóa dấu tiếng Việt và làm sạch thẻ \text / ext
     let cleaned = normalizeFullText(text.trim());
     // Xử lý đệ quy để xóa nhiều lớp nhãn (VD: "A. A. Nội dung")
     const labelRegex = /^(\*?[A-Za-z0-9][\.\)\/\-:\s]\s*)/g;
@@ -179,56 +74,75 @@ const stripOptionLabel = (text: string): string => {
     while (labelRegex.test(cleaned)) {
         cleaned = cleaned.replace(labelRegex, "").trim();
     }
-    return cleaned;
+    return cleanLatexTextTags(cleaned);
 };
 
-const EXTRACTION_INSTRUCTION = `Bạn là chuyên gia trích xuất và phân loại đề thi THPT quốc gia Việt Nam (Toán, Lý, Hóa, Sinh,...).
-NHIỆM VỤ: Chuyển đổi nội dung được cung cấp thành danh sách JSON chuẩn theo cấu trúc phân loại mức độ nhận thức.
+const EXTRACTION_INSTRUCTION = `Bạn là chuyên gia khảo thí và giáo viên sư phạm hàng đầu THPT quốc gia Việt Nam (Toán, Vật lí, Hóa học, Sinh học, Tin học, Ngữ văn, Lịch sử, Địa lí, GDCD, Tiếng Anh).
 
-QUY TẮC PHÂN LOẠI MỨC ĐỘ NHẬN THỨC (level: "B" | "H" | "VD" | "VDC") - BẮT BUỘC:
-Mỗi câu hỏi và mỗi ý con a, b, c, d của câu Đúng/Sai BẮT BUỘC phải có trường 'level' thuộc một trong 4 mức độ:
-1. "B" (Biết / Nhận biết): Nhận diện định nghĩa, khái niệm, công thức, định luật trực tiếp, áp dụng công thức 1 bước đơn giản.
-2. "H" (Hiểu / Thông hiểu): Hiểu bản chất vấn đề, giải thích hiện tượng, đọc đồ thị/bảng biến thiên/hình vẽ cơ bản, tính toán 1-2 bước.
-3. "VD" (Vận dụng): Tổng hợp kiến thức, liên hệ thực tiễn, tính toán nhiều bước, biến đổi toán học/vật lý phức tạp.
-4. "VDC" (Vận dụng cao): Bài toán cực trị, phân hóa điểm 9-10, tình huống thực nghiệm sáng tạo, tư duy liên chương/tổng hợp cao.
+NHIỆM VỤ:
+1. Trích xuất đầy đủ, trung thực và chính xác toàn bộ câu hỏi, phương án, mức độ nhận biết từ tài liệu được cung cấp (file PDF hoặc đoạn văn bản).
+2. TẠO LỜI GIẢI GỌN GÀNG, SÚC TÍCH 100% CHO TẤT CẢ CÁC CÂU HỎI (BẮT BUỘC): Điền đầy đủ vào trường 'solution'. TUYỆT ĐỐI KHÔNG ĐƯỢC ĐỂ TRỐNG TRƯỜNG 'solution' Ở BẤT KỲ CÂU HỎI NÀO.
 
-QUY TẮC TRÍCH XUẤT ĐẶC BIỆT:
-- Nếu tài liệu gốc có sẵn nhãn mức độ như [B], [NB], [H], [TH], [VD], [VDC], (Biết), (Hiểu)... -> Trích xuất chính xác level và xóa nhãn đó khỏi nội dung 'text'.
-- Nếu tài liệu gốc KHÔNG CÓ nhãn mức độ -> AI BẮT BUỘC TỰ ĐÁNH GIÁ và GÁN 'level' chuẩn xác ("B", "H", "VD", "VDC") cho câu hỏi và từng ý con a, b, c, d.
+QUY TẮC VIẾT LỜI GIẢI ('solution') - NGẮN GỌN, VIẾT CÔNG THỨC RỒI BẰNG KẾT QUẢ, THEO GẠCH ĐẦU DÒNG (CỰC KỲ QUAN TRỌNG):
+- PHONG CÁCH: Trình bày đơn giản, súc tích bằng các gạch đầu dòng (- ...).
+- CÔNG THỨC & KẾT QUẢ: Viết công thức/định luật rồi ghi dấu bằng ra kết quả luôn (Dạng: [Công thức] = [Kết quả]). 
+  TUYỆT ĐỐI BỎ QUA quá trình điền/thay thế số chi tiết, vụn vặt vào giữa các phép tính để tránh làm rối lời giải.
+- KHÔNG viết văn rườm rà, giải thích lòng vòng lan man.
 
-QUY TẮC CẤU TRÚC CHI TIẾT:
 1. MCQ (Trắc nghiệm 4 lựa chọn):
-   - 'type': "mcq"
-   - 'level': "B" | "H" | "VD" | "VDC"
-   - 'options': Mảng 4 phương án đã làm sạch (xóa "A.", "B.", "C.", "D.").
-   - 'correctAnswer': BẮT BUỘC điền nội dung của phương án đúng (không kèm nhãn A, B, C, D).
+   - 'correctAnswer': BẮT BUỘC là nội dung chính xác của phương án đúng (không kèm nhãn A, B, C, D).
+   - 'solution': Trình bày bằng gạch đầu dòng:
+     - Áp dụng công thức: [Công thức] = [Kết quả].
+     - Chọn đáp án: [Nội dung phương án đúng].
+
 2. GROUP-TF (Trắc nghiệm Đúng/Sai):
-   - 'type': "group-tf"
-   - 'level': Mức độ chung của câu ("B" | "H" | "VD" | "VDC").
-   - 'subQuestions': Mảng 4 ý (a, b, c, d), mỗi ý có:
-     + 'text': Nội dung ý (đã xóa nhãn "a)", "b)").
-     + 'correctAnswer': "True" hoặc "False".
-     + 'level': Mức độ của riêng ý đó ("B" | "H" | "VD" | "VDC"). Thông thường ý a: "B", ý b: "H", ý c: "VD", ý d: "VDC" hoặc theo nội dung câu.
-   - 'solution': Lời giải chi tiết giải thích cho cả 4 ý: a) Đúng vì... b) Sai vì...
+   - 'subQuestions': BẮT BUỘC có đủ 4 ý (a, b, c, d). Mỗi ý gồm 'text', 'correctAnswer' ("True" hoặc "False") và 'level' ("B"|"H"|"VD"|"VDC").
+   - 'solution': BẮT BUỘC trình bày theo 4 ý a, b, c, d dạng gạch đầu dòng ngắn gọn:
+     - a) Đúng. Vì [Công thức] = [Kết quả].
+     - b) Sai. Vì [Công thức] = [Kết quả đúng].
+     - c) Đúng. Vì [Lý do / Công thức ngắn gọn].
+     - d) Sai. Vì [Lý do / Công thức ngắn gọn].
+
 3. SHORT (Trả lời ngắn):
-   - 'type': "short"
-   - 'level': "B" | "H" | "VD" | "VDC" (thường là "VD" hoặc "VDC")
-   - 'correctAnswer': Giá trị số hoặc biểu thức ngắn (VD: "12.5", "-4")
-   - 'options': null
-4. LaTeX & Công thức: Mọi ký hiệu, công thức toán/lý/hóa BẮT BUỘC bọc trong cặp dấu $...$ (VD: $x^2 + y^2 = 4$).
+   - 'type': BẮT BUỘC là "short".
+   - 'correctAnswer': BẮT BUỘC là giá trị con số chính xác (VD: "12", "-3.5", "0.25").
+   - 'solution': Dùng các gạch đầu dòng ngắn gọn:
+     - [Công thức/Định luật] = [Kết quả].
+     - Đáp số: [Số].
+
+4. PHÂN TÍCH ĐÁP ÁN:
+   - Quét toàn bộ nội dung để tìm bảng đáp án (thường ở cuối trang hoặc đính kèm).
+   - Nếu tài liệu không có bảng đáp án, AI tự tính để xác định 'correctAnswer'.
+
+5. NHẬN DIỆN MỨC ĐỘ (level: "B" | "H" | "VD" | "VDC"):
+   - Tự động nhận diện: [B], [NB] -> "B" (Nhận biết); [H], [TH] -> "H" (Thông hiểu); [VD] -> "VD" (Vận dụng); [VDC] -> "VDC" (Vận dụng cao).
+
+6. QUY TẮC CÔNG THỨC & ĐƠN VỊ:
+   - Mọi công thức toán học phải bọc trong cặp dấu $...$ (VD: $x^2 + y^2 = R^2$, $\\Delta t = 2$ s).
+   - TUYỆT ĐỐI KHÔNG dùng thẻ \\text{...}, \\mathrm{...}, \\mbox{...} (để tránh lỗi JSON escape \\t thành 'ext').
+   - Đơn vị đo (m/s, km/h, kg, g, N, J, W, V, A, Hz, s, min, h, cm, rad/s...): Viết dạng văn bản thường ngoài dấu $ (VD: '$v = 20$ m/s', '$m = 5$ kg') hoặc viết trực tiếp (VD: '$20$ m/s').
+   - Chỉ số trên/dưới (VD: $v_{max}$, $F_{ms}$, $m_1$, $x_2$): Viết thẳng chữ vào chỉ số không bọc \\text{}.
+
+7. LÀM SẠCH NHÃN:
+   - Xóa nhãn "A.", "B.", "a)", "b)", "[B]", "(H)"... ở đầu nội dung câu hỏi và các phương án nhưng giữ nguyên dấu $ của LaTeX.
+
+VÍ DỤ CẤU TRÚC JSON:
+- MCQ: {"type": "mcq", "level": "B", "text": "Một vật dao động điều hòa...", "options": ["$10$ cm/s", "$20$ cm/s", "$30$ cm/s", "$40$ cm/s"], "correctAnswer": "$20$ cm/s", "solution": "- Áp dụng công thức: $v_{max} = \\omega A = 20$ cm/s.\\n- Chọn đáp án: $20$ cm/s."}
+- GROUP-TF: {"type": "group-tf", "level": "H", "text": "Cho một vật dao động điều hòa có phương trình $x = 5\\cos(2\\pi t)$ cm...", "subQuestions": [{"text": "Biên độ dao động của vật là $5$ cm.", "correctAnswer": "True", "level": "B"}, {"text": "Tần số góc của dao động là $4\\pi$ rad/s.", "correctAnswer": "False", "level": "B"}, {"text": "Vận tốc cực đại của vật là $10\\pi$ cm/s.", "correctAnswer": "True", "level": "H"}, {"text": "Gia tốc cực đại của vật là $100\\pi^2$ cm/s$^2$.", "correctAnswer": "False", "level": "VD"}], "solution": "- a) Đúng. Biên độ $A = 5$ cm.\\n- b) Sai. Tần số góc $\\omega = 2\\pi$ rad/s.\\n- c) Đúng. Vận tốc cực đại $v_{max} = \\omega A = 10\\pi$ cm/s.\\n- d) Sai. Gia tốc cực đại $a_{max} = \\omega^2 A = 20\\pi^2$ cm/s$^2$."}
+- SHORT: {"type": "short", "level": "VD", "text": "Một mạch dao động LC lí tưởng gồm cuộn cảm thuần $L = 2$ mH và tụ điện $C = 8$ pF. Chu kỳ dao động riêng của mạch là bao nhiêu microgiây (làm tròn đến 2 chữ số thập phân)?", "correctAnswer": "0.79", "solution": "- Chu kỳ dao động: $T = 2\\pi\\sqrt{LC} = 2,51 \\cdot 10^{-6}$ s = $2,51$ $\\mu$s.\\n- Đáp số: $0.79$."}
 `;
 
 const processAIQuestions = (rawData: any[]): Question[] => {
     return rawData.map((item: any) => {
         const type = item.type?.toLowerCase() || 'mcq';
         const strippedOptions = item.options ? item.options.map((opt: string) => stripOptionLabel(opt)) : (type === 'mcq' ? [] : undefined);
-        let finalCorrectAnswer = item.correctAnswer;
+        let finalCorrectAnswer = item.correctAnswer ? cleanLatexTextTags(String(item.correctAnswer)) : item.correctAnswer;
 
-        // Xử lý trích xuất level từ mọi trường hoặc từ text câu hỏi
-        const rawLevel = item.level ?? item.muc_do ?? item.mucdo ?? item.mucDo ?? item.do_kho ?? item.dokho ?? item.doKho ?? item.difficulty ?? item.bloom ?? item.bloomLevel ?? item.level_code ?? item.cognitiveLevel ?? item.cognitive_level ?? item.rank ?? item.phan_loai;
+        // Xử lý trích xuất level từ text câu hỏi nếu chưa có
         let extractedMain = extractLevelFromText(item.text || "");
-        let finalLevel = normalizeLevel(rawLevel) || extractedMain.level;
-        let cleanedText = extractedMain.cleanText;
+        let finalLevel = normalizeLevel(item.level) || extractedMain.level;
+        let cleanedText = normalizeFullText(extractedMain.cleanText);
+        let cleanedSolution = normalizeFullText(item.solution || "");
 
         if (type === 'mcq' && item.correctAnswer && item.options) {
             let ansText = item.correctAnswer.trim();
@@ -268,20 +182,19 @@ const processAIQuestions = (rawData: any[]): Question[] => {
             ...item,
             type,
             id: uuidv4(),
-            context: item.context ? String(item.context).trim() : undefined,
             text: cleanedText,
+            solution: cleanedSolution,
             level: finalLevel,
             points: item.points || (type === 'mcq' ? 0.25 : type === 'group-tf' ? 1.0 : 0.5),
             options: strippedOptions,
             correctAnswer: finalCorrectAnswer,
             subQuestions: item.subQuestions ? item.subQuestions.map((sq: any) => {
-                const sqRawLevel = sq.level ?? sq.muc_do ?? sq.mucdo ?? sq.mucDo ?? sq.do_kho ?? sq.dokho ?? sq.doKho ?? sq.difficulty ?? sq.bloom ?? sq.bloomLevel ?? sq.level_code ?? sq.cognitiveLevel;
                 const sqExtract = extractLevelFromText(sq.text || "");
                 return { 
                     ...sq, 
                     id: uuidv4(),
                     text: stripOptionLabel(sqExtract.cleanText),
-                    level: normalizeLevel(sqRawLevel) || sqExtract.level,
+                    level: normalizeLevel(sq.level) || sqExtract.level,
                     correctAnswer: (sq.correctAnswer === 'True' || sq.correctAnswer === 'Đúng' || sq.correctAnswer === 'Đ' || sq.correctAnswer === 'T' || sq.correctAnswer === 'true' || sq.correctAnswer === '1') ? 'True' : 'False'
                 };
             }) : undefined
@@ -289,8 +202,31 @@ const processAIQuestions = (rawData: any[]): Question[] => {
     });
 };
 
-export const generateQuizFromPrompt = async (config: any): Promise<Question[]> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const formatGeminiError = (error: any): string => {
+    const errorStr = error?.message || (typeof error === 'object' ? JSON.stringify(error) : String(error));
+    if (errorStr.includes('403') || errorStr.includes('PERMISSION_DENIED') || errorStr.includes('permission')) {
+        return "Lỗi 403 (Không có quyền truy cập): API Key chưa được cấp quyền gọi Gemini API.\n• Khắc phục: Bạn vui lòng vào https://aistudio.google.com/app/apikey tạo một API Key mới (miễn phí), hoặc nếu tạo trong Google Cloud Console thì cần bật (Enable) API 'Generative Language API' và kiểm tra API Key restrictions.";
+    }
+    if (errorStr.includes('429') || errorStr.includes('RESOURCE_EXHAUSTED') || errorStr.includes('quota')) {
+        return "Lỗi 429 (Vượt quá hạn mức): API Key này đã hết lượt gọi tạm thời hoặc bị giới hạn tốc độ. Vui lòng đợi khoảng 1 phút rồi thử lại, hoặc nhập một API Key khác.";
+    }
+    if (errorStr.includes('API_KEY_INVALID') || errorStr.includes('API key not valid') || errorStr.includes('400')) {
+        return "Lỗi 400: API Key không hợp lệ hoặc dữ liệu gửi đi không đúng định dạng. Vui lòng kiểm tra lại mã API Key.";
+    }
+    return errorStr;
+};
+
+const getAiClient = (overrideApiKey?: string): GoogleGenAI => {
+    const key = (overrideApiKey && overrideApiKey.trim()) ? overrideApiKey.trim() : (process.env.API_KEY || "");
+    if (!key) {
+        throw new Error("Chưa có Gemini API Key! Vui lòng nhập API Key của bạn vào ô bên cạnh nút tạo đề/soạn đề hoặc cấu hình trên hệ thống.");
+    }
+    return new GoogleGenAI({ apiKey: key });
+};
+
+export const generateQuizFromPrompt = async (config: any, customApiKey?: string): Promise<Question[]> => {
+    const keyToUse = customApiKey || config.apiKey;
+    const ai = getAiClient(keyToUse);
     
     let matrixPrompt = "";
     if (config.matrix) {
@@ -309,7 +245,6 @@ Hãy phân bổ độ khó cho các câu hỏi sao cho tỉ lệ các mức đ�
         : "NGUỒN DỮ LIỆU: Sử dụng kho tri thức chuyên sâu của bạn về chương trình giáo dục phổ thông Việt Nam để soạn đề.";
 
     const prompt = `Bạn là chuyên gia soạn đề thi THPT quốc gia Việt Nam môn Toán/Lý/Hóa.
-Sử dụng model: gemini-3-flash-preview.
 ${sourceInstruction}
 
 YÊU CẦU CHI TIẾT:
@@ -319,14 +254,19 @@ YÊU CẦU CHI TIẾT:
 ${matrixPrompt}
 
 QUY TẮC KỸ THUẬT BẮT BUỘC:
-1. LaTeX: Mọi biểu thức, công thức, ký hiệu toán/lý/hóa (VD: $\Delta\Phi$, $\Omega$, $x^2$, $\vec{v}$) BẮT BUỘC phải nằm trong cặp dấu $...$. Quy tắc này áp dụng cho NỘI DUNG CÂU HỎI, CÁC PHƯƠNG ÁN (Options), và LỜI GIẢI (Solution).
-2. Solution (Lời giải): Phải có lời giải chi tiết, sư phạm cho từng câu.
-3. MCQ: 'correctAnswer' phải là nội dung của phương án đúng (không kèm nhãn A, B, C, D).
+1. LaTeX & ĐƠN VỊ:
+   - Mọi biểu thức, công thức, ký hiệu toán/lý/hóa (VD: $\\Delta\\Phi$, $\\Omega$, $x^2$, $\\vec{v}$) BẮT BUỘC phải nằm trong cặp dấu $...$. Quy tắc này áp dụng cho NỘI DUNG CÂU HỎI, CÁC PHƯƠNG ÁN (Options), và LỜI GIẢI (Solution).
+   - TUYỆT ĐỐI KHÔNG dùng thẻ \\text{...}, \\mathrm{...}, \\mbox{...} trong công thức (tránh lỗi JSON escape \\t thành 'ext').
+   - Đơn vị đo (m/s, km/h, kg, g, N, J, W, V, A, Hz, s, min, h, cm, rad/s...): Hãy viết dạng văn bản thường ngoài dấu $ (VD: '$v = 20$ m/s', '$m = 5$ kg', '$F = 10$ N') hoặc viết trực tiếp (VD: '$20$ m/s').
+   - Chỉ số trên/dưới (VD: $v_{max}$, $F_{ms}$, $m_1$, $x_2$, $I_{hd}$): Đánh trực tiếp chữ vào chỉ số không bọc \\text{}.
+2. Solution (Lời giải): Lời giải đơn giản, súc tích bằng các gạch đầu dòng. Viết công thức rồi ghi dấu bằng ra kết quả ngay ([Công thức] = [Kết quả]), TUYỆT ĐỐI BỎ QUA quá trình thay số/điền số chi tiết vào giữa các phép tính để tránh rối mắt.
+3. MCQ: 'correctAnswer' phải là nội dung của phương án đúng (không kèm nhãn A, B, C, D). 'solution' gồm: - Áp dụng công thức: [Công thức] = [Kết quả]. - Chọn đáp án: [Phương án đúng].
 4. GROUP-TF: 
    - 'subQuestions' phải có chính xác 4 ý (a, b, c, d).
-   - 'solution' phải giải thích chi tiết cho từng ý theo mẫu:
-     a) [Đúng/Sai] : Vì [Lý do chi tiết]
-     ... (tương tự cho b, c, d)
+   - 'solution' trình bày 4 gạch đầu dòng ngắn gọn:
+     - a) [Đúng/Sai]. Vì [Công thức] = [Kết quả]
+     - b) [Đúng/Sai]. Vì [Công thức] = [Kết quả]
+     ... (tương tự cho c, d)
 5. Options: Tuyệt đối KHÔNG bao gồm nhãn "A.", "B.", "C.", "D." vào nội dung phương án.
 6. JSON: Trả về kết quả dưới dạng mảng JSON chuẩn xác theo schema đã định.`;
 
@@ -341,7 +281,7 @@ QUY TẮC KỸ THUẬT BẮT BUỘC:
             : prompt;
 
         const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: 'gemini-2.5-flash',
             contents: contents,
             config: {
                 responseMimeType: "application/json",
@@ -382,16 +322,16 @@ QUY TẮC KỸ THUẬT BẮT BUỘC:
         
         return processAIQuestions(rawData);
     } catch (error: any) {
-        throw new Error("AI không thể tạo đề: " + error.message);
+        throw new Error("AI không thể tạo đề: " + formatGeminiError(error));
     }
 };
 
-export const parseQuestionsFromPDF = async (base64Data: string): Promise<Question[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const parseQuestionsFromPDF = async (base64Data: string, customApiKey?: string): Promise<Question[]> => {
+  const ai = getAiClient(customApiKey);
   
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-2.5-flash',
       contents: {
           parts: [
               { inlineData: { mimeType: "application/pdf", data: base64Data } },
@@ -433,11 +373,11 @@ export const parseQuestionsFromPDF = async (base64Data: string): Promise<Questio
     });
 
     const textOutput = response.text || "[]";
-    const rawData = JSON.parse(cleanJsonString(textOutput));
+    const rawData = safeParseJsonWithLatex(textOutput);
     
     return processAIQuestions(rawData);
   } catch (error: any) {
-    throw new Error("Lỗi đọc PDF: " + error.message);
+    throw new Error("Lỗi đọc PDF: " + formatGeminiError(error));
   }
 };
 
@@ -445,8 +385,7 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
     let parsed: any;
     if (typeof input === 'string') {
         try {
-            const cleanStr = cleanJsonString(input);
-            parsed = JSON.parse(cleanStr);
+            parsed = safeParseJsonWithLatex(input);
         } catch (e: any) {
             throw new Error("Cấu trúc file hoặc chuỗi JSON không hợp lệ. Vui lòng kiểm tra lại cú pháp JSON!");
         }
@@ -563,8 +502,7 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
                     ans = 'False';
                 }
                 const sqText = sq.text || sq.content || sq.noi_dung || sq.question || '';
-                const sqRawLevel = sq.level ?? sq.muc_do ?? sq.mucdo ?? sq.mucDo ?? sq.do_kho ?? sq.dokho ?? sq.doKho ?? sq.difficulty ?? sq.bloom ?? sq.bloomLevel ?? sq.level_code ?? sq.cognitiveLevel ?? sq.cognitive_level ?? sq.rank ?? sq.phan_loai ?? sq.phanLoai ?? sq.tier ?? sq.grade_level;
-                const sqLevel = normalizeLevel(sqRawLevel);
+                const sqLevel = normalizeLevel(sq.level || sq.muc_do || sq.do_kho);
                 return {
                     text: sqText.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$'),
                     correctAnswer: ans,
@@ -629,19 +567,23 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
             }
         }
 
-        // Question context & text:
-        const contextStr = q.context || q.loi_dan || q.dan_nhap || q.doan_van || q.bai_doc || '';
+        // Question text: hợp nhất context (ngữ cảnh/đoạn văn) + câu hỏi
+        let rawText = '';
+        const contextStr = q.context || q.doan_van || q.bai_doc || '';
         const mainTextStr = q.text || q.question || q.content || q.cau_hoi || q.title || '';
 
+        if (contextStr && mainTextStr) {
+            rawText = `${contextStr}\n${mainTextStr}`;
+        } else {
+            rawText = mainTextStr || contextStr || '';
+        }
+
         const rawSolution = q.solution || q.explanation || q.loi_giai || q.huong_dan_giai || q.guide || '';
-        const rawLevel = q.level ?? q.muc_do ?? q.mucdo ?? q.mucDo ?? q.do_kho ?? q.dokho ?? q.doKho ?? q.difficulty ?? q.bloom ?? q.bloomLevel ?? q.level_code ?? q.cognitiveLevel ?? q.cognitive_level ?? q.rank ?? q.phan_loai ?? q.phanLoai ?? q.tier ?? q.grade_level;
 
         return {
             ...q,
             type,
-            level: normalizeLevel(rawLevel),
-            context: contextStr ? contextStr.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$') : undefined,
-            text: mainTextStr.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$'),
+            text: rawText.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$'),
             options: type === 'mcq' ? options : undefined,
             correctAnswer: typeof correctAnswer === 'string' ? correctAnswer.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$') : String(correctAnswer),
             solution: rawSolution.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$'),
@@ -661,13 +603,13 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
     };
 };
 
-export const parseQuestionsFromText = async (rawText: string): Promise<Question[]> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const parseQuestionsFromText = async (rawText: string, customApiKey?: string): Promise<Question[]> => {
+    const ai = getAiClient(customApiKey);
     
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: `${EXTRACTION_INSTRUCTION}\n\nNỘI DUNG VĂN BẢN CẦN TRÍCH XUẤT VÀ PHÂN LOẠI MỨC ĐỘ:\n${rawText}`,
+            model: 'gemini-2.5-flash',
+            contents: `${EXTRACTION_INSTRUCTION}\n\nNỘI DUNG VĂN BẢN CẦN TRÍCH XUẤT:\n${rawText}`,
             config: {
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -677,7 +619,6 @@ export const parseQuestionsFromText = async (rawText: string): Promise<Question[
                         properties: {
                             type: { type: Type.STRING },
                             text: { type: Type.STRING },
-                            level: { type: Type.STRING, nullable: true },
                             points: { type: Type.NUMBER },
                             options: { type: Type.ARRAY, items: { type: Type.STRING }, nullable: true },
                             correctAnswer: { type: Type.STRING, nullable: true },
@@ -689,8 +630,7 @@ export const parseQuestionsFromText = async (rawText: string): Promise<Question[
                                     type: Type.OBJECT,
                                     properties: {
                                         text: { type: Type.STRING },
-                                        correctAnswer: { type: Type.STRING },
-                                        level: { type: Type.STRING, nullable: true }
+                                        correctAnswer: { type: Type.STRING }
                                     },
                                     required: ["text", "correctAnswer"]
                                 }
@@ -707,6 +647,234 @@ export const parseQuestionsFromText = async (rawText: string): Promise<Question[
         
         return processAIQuestions(rawData);
     } catch (error: any) {
-        throw new Error("Lỗi bóc tách văn bản: " + error.message);
+        throw new Error("Lỗi bóc tách văn bản: " + formatGeminiError(error));
     }
 };
+
+export const solveQuestionWithAI = async (
+    question: Question,
+    subject: string = 'Toán',
+    grade: string = '12',
+    customApiKey?: string
+): Promise<{ solution: string; correctAnswer?: string }> => {
+    const ai = getAiClient(customApiKey);
+
+    let questionDesc = `NỘI DUNG CÂU HỎI:\n${question.text}\n`;
+    if (question.type === 'mcq' && question.options) {
+        questionDesc += `CÁC PHƯƠNG ÁN:\n${question.options.map((opt, i) => `${String.fromCharCode(65 + i)}. ${opt}`).join('\n')}\n`;
+        if (question.correctAnswer) {
+            questionDesc += `ĐÁP ÁN ĐÃ CHỌN: ${question.correctAnswer}\n`;
+        }
+    } else if (question.type === 'group-tf' && question.subQuestions) {
+        questionDesc += `CÁC Ý TRẮC NGHIỆM ĐÚNG/SAI:\n${question.subQuestions.map((sq, i) => `${String.fromCharCode(97 + i)}) ${sq.text} (Hiện tại: ${sq.correctAnswer === 'True' ? 'Đúng' : 'Sai'})`).join('\n')}\n`;
+    } else if (question.type === 'short') {
+        if (question.correctAnswer) {
+            questionDesc += `ĐÁP SỐ ĐÃ NHẬP: ${question.correctAnswer}\n`;
+        }
+    }
+
+    const prompt = `Bạn là giáo viên chuyên môn môn ${subject} khối lớp ${grade} THPT Việt Nam.
+NHIỆM VỤ: Hãy giải bài toán/câu hỏi sau một cách ngắn gọn, sư phạm, bước giải súc tích, mạch lạc và chính xác 100%.
+
+${questionDesc}
+
+YÊU CẦU LỜI GIẢI ('solution') - BẮT BUỘC:
+1. PHONG CÁCH & QUY TẮC CÔNG THỨC:
+   - Trình bày đơn giản bằng các gạch đầu dòng (- ...).
+   - Nêu công thức/định luật rồi ghi dấu bằng ra kết quả luôn (Dạng: [Công thức] = [Kết quả]). 
+   - TUYỆT ĐỐI BỎ QUA quá trình điền/thay thế số chi tiết, vụn vặt vào giữa các phép tính để tránh rối mắt.
+2. CẤU TRÚC THEO DẠNG:
+   - Với MCQ (Trắc nghiệm 4 lựa chọn):
+     - Áp dụng công thức: [Công thức] = [Kết quả].
+     - Chọn đáp án: [Phương án đúng].
+   - Với GROUP-TF (Đúng/Sai): BẮT BUỘC giải thích cho cả 4 ý theo gạch đầu dòng ngắn gọn:
+     - a) [Đúng/Sai]. Vì [Công thức] = [Kết quả].
+     - b) [Đúng/Sai]. Vì [Công thức] = [Kết quả đúng].
+     - c) [Đúng/Sai]. Vì [Công thức / Lý do ngắn gọn].
+     - d) [Đúng/Sai]. Vì [Công thức / Lý do ngắn gọn].
+   - Với SHORT (Trả lời ngắn):
+     - [Công thức/Định luật] = [Kết quả].
+     - Đáp số: [Số].
+3. CÔNG THỨC & ĐƠN VỊ:
+   - Mọi công thức bọc trong $...$.
+   - TUYỆT ĐỐI KHÔNG dùng \\text{...}, \\mathrm{...} (để tránh lỗi JSON escape).
+   - Đơn vị viết bên ngoài dấu $ (VD: '$v = 20$ m/s', '$m = 5$ kg').
+   - Chỉ số dưới viết trực tiếp (VD: $v_{max}$, $F_{ms}$).
+4. ĐÁP ÁN ĐÚNG ('correctAnswer'): Nếu câu hỏi chưa có đáp án hoặc bạn tìm ra đáp án đúng, hãy cung cấp nội dung đáp án đúng.`;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        solution: { type: Type.STRING },
+                        correctAnswer: { type: Type.STRING, nullable: true }
+                    },
+                    required: ["solution"]
+                }
+            }
+        });
+
+        const raw = safeParseJsonWithLatex(response.text || "{}") || {};
+        return {
+            solution: normalizeFullText(raw.solution || ""),
+            correctAnswer: raw.correctAnswer ? cleanLatexTextTags(raw.correctAnswer) : undefined
+        };
+    } catch (error: any) {
+        throw new Error("Lỗi AI giải câu hỏi: " + formatGeminiError(error));
+    }
+};
+
+export const solveMultipleQuestionsWithAI = async (
+    questions: Question[],
+    subject: string = 'Toán',
+    grade: string = '12',
+    customApiKey?: string,
+    onProgress?: (completed: number, total: number) => void
+): Promise<Question[]> => {
+    const updated: Question[] = [];
+    for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        try {
+            const res = await solveQuestionWithAI(q, subject, grade, customApiKey);
+            updated.push({
+                ...q,
+                solution: res.solution || q.solution,
+                correctAnswer: (q.type !== 'group-tf' && res.correctAnswer && !q.correctAnswer) ? res.correctAnswer : q.correctAnswer
+            });
+        } catch (e) {
+            console.error(`Lỗi giải câu ${i + 1}:`, e);
+            updated.push(q);
+        }
+        if (onProgress) {
+            onProgress(i + 1, questions.length);
+        }
+    }
+    return updated;
+};
+
+export interface QuestionChapterAssignment {
+    questionId: string;
+    chapterId?: string;
+    chapterName: string;
+}
+
+/**
+ * Dùng AI Gemini quét toàn bộ câu hỏi trong đề và tự động phân loại vào chương học tương ứng
+ */
+export const classifyQuestionsIntoChapters = async (
+    questions: Question[],
+    chapters: { id: string; name: string; grade?: string; subject?: string }[],
+    options?: {
+        subject?: string;
+        grade?: string;
+        customApiKey?: string;
+    }
+): Promise<QuestionChapterAssignment[]> => {
+    if (!questions || questions.length === 0) return [];
+    if (!chapters || chapters.length === 0) return [];
+
+    const ai = getAiClient(options?.customApiKey);
+
+    // Chuẩn bị danh sách chương cho AI
+    const chaptersListText = chapters.map((c, idx) => `${idx + 1}. [ID: "${c.id}"] Tên chương: "${c.name}"`).join('\n');
+
+    // Chuẩn bị nội dung câu hỏi
+    const questionsSummary = questions.map((q, idx) => {
+        let content = `--- CÂU ${idx + 1} [ID: "${q.id}"] ---
+Loại: ${q.type}
+Nội dung: ${q.text}`;
+        if (q.options && q.options.length > 0) {
+            content += `\nCác phương án: ${q.options.map((opt, i) => `${String.fromCharCode(65 + i)}. ${opt}`).join(' | ')}`;
+        }
+        if (q.subQuestions && q.subQuestions.length > 0) {
+            content += `\nCác ý: ${q.subQuestions.map((sq, i) => `${String.fromCharCode(97 + i)}) ${sq.text}`).join(' | ')}`;
+        }
+        return content;
+    }).join('\n\n');
+
+    const prompt = `Bạn là chuyên gia giáo dục phụ trách phân loại đề thi môn ${options?.subject || 'Toán'} - Khối ${options?.grade || '12'} theo chương mục kiến thức.
+Dưới đây là danh sách các chương học hiện có và danh sách các câu hỏi trong đề thi.
+
+DANH SÁCH CÁC CHƯƠNG HỌC (BẮT BUỘC CHỈ ĐƯỢC CHỌN TRONG DANH SÁCH NÀY):
+${chaptersListText}
+
+DANH SÁCH CÂU HỎI TRONG ĐỀ:
+${questionsSummary}
+
+NHIỆM VỤ:
+1. Đọc kỹ nội dung từng câu hỏi (kiến thức toán/lý/hóa/sinh/sử/địa/v.v., công thức, định nghĩa, hiện tượng).
+2. Xác định câu hỏi đó thuộc về CHƯƠNG NÀO phù hợp nhất trong danh sách các chương học ở trên.
+3. Trả về mảng JSON gồm tất cả các câu hỏi được phân loại, mỗi phần tử có:
+   - "questionId": ID chính xác của câu hỏi
+   - "chapterId": ID chính xác của chương được gán (trong ngoặc kép sau [ID: "..."])
+   - "chapterName": Tên chính xác của chương được gán
+Tuyệt đối không bỏ sót bất kỳ câu hỏi nào.`;
+
+    const runCall = async (modelName: string) => {
+        const response = await ai.models.generateContent({
+            model: modelName,
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            questionId: { type: Type.STRING },
+                            chapterId: { type: Type.STRING },
+                            chapterName: { type: Type.STRING }
+                        },
+                        required: ["questionId", "chapterId", "chapterName"]
+                    }
+                }
+            }
+        });
+
+        const textOutput = response.text || "[]";
+        return safeParseJsonWithLatex(textOutput) || [];
+    };
+
+    let rawAssignments: any[] = [];
+    try {
+        rawAssignments = await runCall('gemini-3.8-flash');
+    } catch (err: any) {
+        console.warn("Thử model gemini-3.8-flash không thành công, thử lại với gemini-2.5-flash:", err);
+        try {
+            rawAssignments = await runCall('gemini-2.5-flash');
+        } catch (secondErr: any) {
+            throw new Error("Lỗi AI phân loại chương: " + formatGeminiError(secondErr));
+        }
+    }
+
+    if (!Array.isArray(rawAssignments)) {
+        return [];
+    }
+
+    // Chuẩn hóa và đối chiếu lại với danh sách chapters thực tế để đảm bảo ID và Name chính xác 100%
+    const chapterMapById = new Map<string, typeof chapters[0]>();
+    const chapterMapByName = new Map<string, typeof chapters[0]>();
+    chapters.forEach(c => {
+        chapterMapById.set(c.id, c);
+        chapterMapByName.set(c.name.trim().toLowerCase(), c);
+    });
+
+    return rawAssignments.map(item => {
+        const qId = String(item.questionId || '').trim();
+        let targetChapter = chapterMapById.get(item.chapterId);
+        if (!targetChapter && item.chapterName) {
+            targetChapter = chapterMapByName.get(String(item.chapterName).trim().toLowerCase());
+        }
+        return {
+            questionId: qId,
+            chapterId: targetChapter ? targetChapter.id : item.chapterId,
+            chapterName: targetChapter ? targetChapter.name : (item.chapterName || '')
+        };
+    });
+};
+
