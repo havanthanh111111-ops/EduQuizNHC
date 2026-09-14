@@ -5,13 +5,13 @@ import { createClient } from '@supabase/supabase-js';
 import { User, Quiz, Result, Chapter, Question, ExamSession, PublishedResult, Grade, ClassRoom } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
-let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://uazwlywahhqrsdjtsomj.supabase.co').trim();
+let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://lchfhsioxvgkjfsikycl.supabase.co').trim();
 if (cleanedUrl.endsWith('/rest/v1') || cleanedUrl.endsWith('/rest/v1/')) {
     cleanedUrl = cleanedUrl.replace(/\/rest\/v1\/?$/, '');
 }
 const SUPABASE_URL = cleanedUrl;
 
-const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVhendseXdhaGhxcnNkanRzb21qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzODk1MjEsImV4cCI6MjEwNDk2NTUyMX0.-idGRSHSAzjffNOhCYnuZfy_w-yF8BYftqbNDm2KXFg').trim();
+const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjaGZoc2lveHZna2pmc2lreWNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NTI3MDksImV4cCI6MjA4MDUyODcwOX0.toOc2ytPzo_cqhpQyd0YOLq4Zvk3BtfdZSziXN__j8Q').trim();
 
 let supabase: any = null;
 
@@ -386,6 +386,58 @@ export const changePassword = async (userId: string, newPassword: string): Promi
     return !error;
 };
 
+// Định nghĩa các trường Metadata của Đề thi (chỉ lấy thông tin hiển thị, KHÔNG LẤY cột câu hỏi để giảm 98% băng thông)
+const QUIZ_METADATA_PROJECTION = `
+    id,
+    grade,
+    data->title,
+    data->description,
+    data->type,
+    data->academicYear,
+    data->category,
+    data->startTime,
+    data->endTime,
+    data->durationMinutes,
+    data->questionCount,
+    data->attemptCount,
+    data->createdAt,
+    data->isPublished,
+    data->isMonitored,
+    data->isUnlisted,
+    data->targetType,
+    data->assignedClassIds,
+    data->assignedClasses,
+    data->maxAttempts,
+    data->allowReview,
+    data->orderIndex
+`;
+
+const mapRowToQuizMeta = (row: any): Quiz => ({
+    id: row.id,
+    grade: row.grade || '12',
+    title: row.title || 'Đề thi',
+    description: row.description || '',
+    type: row.type || 'practice',
+    academicYear: row.academicYear || '',
+    category: row.category || '',
+    startTime: row.startTime || '',
+    endTime: row.endTime || '',
+    durationMinutes: typeof row.durationMinutes === 'number' ? row.durationMinutes : (parseInt(row.durationMinutes) || 45),
+    questionCount: typeof row.questionCount === 'number' ? row.questionCount : (parseInt(row.questionCount) || 0),
+    attemptCount: typeof row.attemptCount === 'number' ? row.attemptCount : (parseInt(row.attemptCount) || 0),
+    createdAt: row.createdAt || new Date().toISOString(),
+    isPublished: row.isPublished === true || row.isPublished === 'true',
+    isMonitored: row.isMonitored === true || row.isMonitored === 'true',
+    isUnlisted: row.isUnlisted === true || row.isUnlisted === 'true',
+    targetType: row.targetType || 'all',
+    assignedClassIds: Array.isArray(row.assignedClassIds) ? row.assignedClassIds : [],
+    assignedClasses: Array.isArray(row.assignedClasses) ? row.assignedClasses : [],
+    maxAttempts: typeof row.maxAttempts === 'number' ? row.maxAttempts : 2,
+    allowReview: row.allowReview ?? true,
+    orderIndex: typeof row.orderIndex === 'number' ? row.orderIndex : 0,
+    questions: [] // Tuyệt đối không tải mảng câu hỏi ở metadata để tiết kiệm 98% băng thông
+});
+
 // --- Quizzes ---
 export const getQuizzesMetadataPage = async (page: number, pageSize: number = 20, grade?: Grade): Promise<{ data: Quiz[], total: number }> => {
   if (!supabase) return { data: [], total: 0 };
@@ -394,7 +446,7 @@ export const getQuizzesMetadataPage = async (page: number, pageSize: number = 20
     const to = from + pageSize - 1;
 
     let query = supabase.from('quizzes')
-      .select('id, grade, data', { count: 'exact' })
+      .select(QUIZ_METADATA_PROJECTION, { count: 'exact' })
       .order('id', { ascending: false })
       .range(from, to);
       
@@ -405,17 +457,7 @@ export const getQuizzesMetadataPage = async (page: number, pageSize: number = 20
     const { data, count, error } = await query;
     if (error) throw error;
     
-    const quizzes = data ? data.map((row: any) => {
-        const quiz = row.data as Quiz;
-        return {
-            ...quiz,
-            id: row.id,
-            grade: row.grade,
-            attemptCount: quiz.attemptCount || 0,
-            questions: []
-        };
-    }) : [];
-
+    const quizzes = data ? data.map(mapRowToQuizMeta) : [];
     return { data: quizzes, total: count || 0 };
   } catch (e) {
     console.error("Lỗi getQuizzesMetadataPage:", e);
@@ -433,6 +475,15 @@ export const invalidateCache = (prefix?: string) => {
   } else {
     Object.keys(memoryCache).filter(k => k.startsWith(prefix)).forEach(k => delete memoryCache[k]);
   }
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      if (!prefix) {
+        Object.keys(sessionStorage).filter(k => k.startsWith('quizzes_') || k.startsWith('quiz_')).forEach(k => sessionStorage.removeItem(k));
+      } else {
+        Object.keys(sessionStorage).filter(k => k.startsWith(prefix)).forEach(k => sessionStorage.removeItem(k));
+      }
+    }
+  } catch (e) {}
 };
 
 // Cập nhật trực tiếp 1 đề thi vào Cache Memory mà không làm mất bộ đệm 70 đề khác
@@ -444,6 +495,11 @@ export const updateQuizInCache = (updatedQuiz: Quiz) => {
   };
 
   quizDetailCache.set(updatedQuiz.id, updatedQuiz);
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(`quiz_detail_${updatedQuiz.id}`, JSON.stringify(updatedQuiz));
+    }
+  } catch (e) {}
 
   Object.keys(memoryCache).forEach(k => {
     if (k.startsWith('quizzes_meta_')) {
@@ -465,6 +521,11 @@ export const updateQuizInCache = (updatedQuiz: Quiz) => {
 // Xóa 1 đề thi khỏi Cache Memory trực tiếp
 export const removeQuizFromCache = (quizId: string) => {
   quizDetailCache.delete(quizId);
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(`quiz_detail_${quizId}`);
+    }
+  } catch (e) {}
   Object.keys(memoryCache).forEach(k => {
     if (k.startsWith('quizzes_meta_') || k.startsWith('quizzes_full_')) {
       const list = memoryCache[k].data as Quiz[];
@@ -483,6 +544,20 @@ export const getQuizzesMetadata = async (grade?: Grade, forceRefresh: boolean = 
     return memoryCache[cacheKey].data;
   }
 
+  // Kiểm tra sessionStorage để khi học sinh chuyển trang/F5 không phải kéo lại từ Supabase
+  try {
+    if (!forceRefresh && typeof sessionStorage !== 'undefined') {
+      const stored = sessionStorage.getItem(cacheKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.expires > now && Array.isArray(parsed.data)) {
+          memoryCache[cacheKey] = parsed;
+          return parsed.data;
+        }
+      }
+    }
+  } catch (e) {}
+
   try {
     let allQuizzes: any[] = [];
     let from = 0;
@@ -491,7 +566,7 @@ export const getQuizzesMetadata = async (grade?: Grade, forceRefresh: boolean = 
 
     while (hasMore) {
         let query = supabase.from('quizzes')
-            .select('id, grade, data')
+            .select(QUIZ_METADATA_PROJECTION)
             .order('id', { ascending: false })
             .range(from, from + step - 1);
             
@@ -511,18 +586,16 @@ export const getQuizzesMetadata = async (grade?: Grade, forceRefresh: boolean = 
         }
     }
     
-    const mapped = allQuizzes.map((row: any) => {
-        const quiz = row.data as Quiz;
-        return {
-            ...quiz,
-            id: row.id,
-            grade: row.grade,
-            attemptCount: quiz.attemptCount || 0,
-            questions: [] // Không tải câu hỏi để tiết kiệm băng thông
-        };
-    });
+    const mapped = allQuizzes.map(mapRowToQuizMeta);
 
-    memoryCache[cacheKey] = { data: mapped, expires: now + CACHE_TTL };
+    const cachePayload = { data: mapped, expires: now + CACHE_TTL };
+    memoryCache[cacheKey] = cachePayload;
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(cacheKey, JSON.stringify(cachePayload));
+      }
+    } catch (e) {}
+
     return mapped;
   } catch (e) {
     console.error("Lỗi getQuizzesMetadata:", e);
@@ -583,10 +656,30 @@ export const getQuizById = async (id: string, forceRefresh: boolean = false): Pr
     if (!forceRefresh && quizDetailCache.has(id)) {
         return quizDetailCache.get(id)!;
     }
+
+    // Kiểm tra sessionStorage để tải đề tức thì không tốn băng thông mạng
+    try {
+        if (!forceRefresh && typeof sessionStorage !== 'undefined') {
+            const cached = sessionStorage.getItem(`quiz_detail_${id}`);
+            if (cached) {
+                const parsed = JSON.parse(cached) as Quiz;
+                quizDetailCache.set(id, parsed);
+                return parsed;
+            }
+        }
+    } catch (e) {}
+
     const { data, error } = await supabase.from('quizzes').select('data').eq('id', id).single();
     if (error || !data) return null;
     const quiz = data.data as Quiz;
     quizDetailCache.set(id, quiz);
+
+    try {
+        if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem(`quiz_detail_${id}`, JSON.stringify(quiz));
+        }
+    } catch (e) {}
+
     return quiz;
 };
 
@@ -937,9 +1030,24 @@ export const assignStudentsToClass = async (studentIds: string[], classInfo: { c
 };
 
 // --- Question Bank ---
-export const getBankQuestions = async (forceRefresh: boolean = false): Promise<Question[]> => {
+export const getBankQuestions = async (
+    gradeFilterOrForce?: Grade | 'all' | boolean, 
+    forceRefreshParam: boolean = false
+): Promise<Question[]> => {
     if (!supabase) return [];
-    const cacheKey = 'bank_questions_all';
+    
+    let gradeFilter: Grade | 'all' | undefined;
+    let forceRefresh = forceRefreshParam;
+
+    if (typeof gradeFilterOrForce === 'boolean') {
+        forceRefresh = gradeFilterOrForce;
+        gradeFilter = 'all';
+    } else {
+        gradeFilter = gradeFilterOrForce;
+    }
+
+    const filterKey = gradeFilter || 'all';
+    const cacheKey = `bank_questions_${filterKey}`;
     const now = Date.now();
     if (!forceRefresh && memoryCache[cacheKey] && memoryCache[cacheKey].expires > now) {
       return memoryCache[cacheKey].data;
@@ -951,9 +1059,14 @@ export const getBankQuestions = async (forceRefresh: boolean = false): Promise<Q
         let hasMore = true;
 
         while (hasMore) {
-            const { data, error } = await supabase.from('bank_questions')
-                .select('data')
-                .range(from, from + step - 1);
+            let query = supabase.from('bank_questions')
+                .select('data');
+            
+            if (gradeFilter && gradeFilter !== 'all') {
+                query = query.or(`data->>quizGrade.eq.${gradeFilter},data->>grade.eq.${gradeFilter}`);
+            }
+
+            const { data, error } = await query.range(from, from + step - 1);
             
             if (error) throw error;
             if (data && data.length > 0) {
@@ -1158,9 +1271,133 @@ export const saveBankQuestion = async (q: Question): Promise<void> => {
     }
 };
 
-export const uploadQuizImage = async (file: File): Promise<string> => {
-    // Helper convert sang Base64 Data URL
-    const toBase64 = (f: File): Promise<string> => {
+// --- Cấu hình lưu trữ hình ảnh (ImgBB & Supabase Storage) ---
+export type ImageStorageProvider = 'auto' | 'imgbb' | 'supabase';
+
+export interface ImageStorageConfig {
+    provider: ImageStorageProvider;
+    imgbbApiKey: string;
+}
+
+export const DEFAULT_IMGBB_KEY = '2ea8b9b28f97a0369bac68c8cd6c0a3d';
+
+export const getImageStorageConfig = (): ImageStorageConfig => {
+    try {
+        const storedProvider = localStorage.getItem('eduquiz_image_provider') as ImageStorageProvider;
+        const storedKey = localStorage.getItem('eduquiz_imgbb_key');
+        return {
+            provider: (storedProvider === 'imgbb' || storedProvider === 'supabase' || storedProvider === 'auto') ? storedProvider : 'auto',
+            imgbbApiKey: (storedKey && storedKey.trim()) ? storedKey.trim() : DEFAULT_IMGBB_KEY
+        };
+    } catch (e) {
+        return {
+            provider: 'auto',
+            imgbbApiKey: DEFAULT_IMGBB_KEY
+        };
+    }
+};
+
+export const saveImageStorageConfig = (config: Partial<ImageStorageConfig>): void => {
+    try {
+        if (config.provider) {
+            localStorage.setItem('eduquiz_image_provider', config.provider);
+        }
+        if (config.imgbbApiKey !== undefined) {
+            localStorage.setItem('eduquiz_imgbb_key', config.imgbbApiKey.trim());
+        }
+    } catch (e) {}
+};
+
+/**
+ * Tải ảnh trực tiếp lên ImgBB qua API
+ */
+export const uploadToImgbb = async (file: File | Blob, apiKey?: string): Promise<string> => {
+    const key = (apiKey && apiKey.trim()) || getImageStorageConfig().imgbbApiKey || DEFAULT_IMGBB_KEY;
+    if (!key) throw new Error("Chưa cung cấp ImgBB API Key");
+
+    const formData = new FormData();
+    formData.append('image', file);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout
+
+    try {
+        const response = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(key)}`, {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => null);
+            throw new Error(errData?.error?.message || `ImgBB trả về mã lỗi HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (!data || !data.success || !data.data) {
+            throw new Error(data?.error?.message || "ImgBB không trả về dữ liệu hình ảnh hợp lệ");
+        }
+
+        // Trả về direct URL của ảnh (display_url hoặc url trên CDN i.ibb.co)
+        const imageUrl = data.data.display_url || data.data.url;
+        if (!imageUrl) {
+            throw new Error("Không tìm thấy đường link ảnh từ ImgBB");
+        }
+        return imageUrl;
+    } catch (error: any) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            throw new Error("Tải ảnh lên ImgBB bị quá thời gian chờ (Timeout)");
+        }
+        throw error;
+    }
+};
+
+/**
+ * Tải ảnh lên Supabase Storage (Bucket 'quiz-images')
+ */
+export const uploadToSupabaseStorage = async (file: File | Blob): Promise<string> => {
+    if (!supabase) throw new Error("Mất kết nối Supabase");
+    const fileExt = (file instanceof File && file.name ? file.name.split('.').pop() : 'png') || 'png';
+    const fileName = `${uuidv4()}.${fileExt}`;
+    const { error: uploadError } = await supabase.storage.from('quiz-images').upload(fileName, file, {
+        contentType: (file as any).type || 'image/png',
+        upsert: true
+    });
+
+    if (uploadError) {
+        throw uploadError;
+    }
+
+    const { data } = supabase.storage.from('quiz-images').getPublicUrl(fileName);
+    if (!data?.publicUrl) {
+        throw new Error("Không lấy được Public URL từ Supabase Storage");
+    }
+    return data.publicUrl;
+};
+
+export interface ImageUploadResult {
+    url: string;
+    provider: 'imgbb' | 'supabase' | 'base64';
+    error?: string;
+}
+
+/**
+ * Tải ảnh đề thi với cơ chế lựa chọn thông minh & tự động fallback:
+ * Ưu tiên ImgBB -> Chuyển Supabase Storage -> Chuyển Base64 DataURL
+ */
+export const uploadQuizImageWithResult = async (
+    file: File | Blob, 
+    customProvider?: ImageStorageProvider,
+    customApiKey?: string
+): Promise<ImageUploadResult> => {
+    const config = getImageStorageConfig();
+    const provider = customProvider || config.provider;
+    const apiKey = customApiKey || config.imgbbApiKey;
+
+    const toBase64 = (f: File | Blob): Promise<string> => {
         return new Promise((resolve) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string || '');
@@ -1169,29 +1406,59 @@ export const uploadQuizImage = async (file: File): Promise<string> => {
         });
     };
 
-    if (!supabase) {
-        return await toBase64(file);
-    }
-
-    try {
-        const fileExt = (file.name || 'image.png').split('.').pop() || 'png';
-        const fileName = `${uuidv4()}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from('quiz-images').upload(fileName, file, {
-            contentType: file.type || 'image/png',
-            upsert: true
-        });
-
-        if (uploadError) {
-            console.warn("Lỗi upload Supabase storage, tự động chuyển sang lưu dạng DataURL:", uploadError);
-            return await toBase64(file);
+    // 1. Chế độ 'auto' (Ưu tiên ImgBB -> Fallback Supabase Storage -> Fallback Base64)
+    if (provider === 'auto') {
+        try {
+            const imgbbUrl = await uploadToImgbb(file, apiKey);
+            return { url: imgbbUrl, provider: 'imgbb' };
+        } catch (imgbbErr: any) {
+            console.warn("⚠️ Upload ImgBB không thành công, tự động chuyển sang Supabase Storage:", imgbbErr?.message || imgbbErr);
+            try {
+                const supabaseUrl = await uploadToSupabaseStorage(file);
+                return { url: supabaseUrl, provider: 'supabase' };
+            } catch (supabaseErr: any) {
+                console.warn("⚠️ Upload Supabase Storage cũng không thành công, fallback sang Base64 DataURL:", supabaseErr?.message || supabaseErr);
+                const base64Url = await toBase64(file);
+                return { 
+                    url: base64Url, 
+                    provider: 'base64', 
+                    error: `ImgBB: ${imgbbErr?.message || 'Lỗi'}; Supabase: ${supabaseErr?.message || 'Lỗi'}` 
+                };
+            }
         }
-
-        const { data } = supabase.storage.from('quiz-images').getPublicUrl(fileName);
-        return data?.publicUrl || (await toBase64(file));
-    } catch (err) {
-        console.warn("Lỗi upload ảnh, chuyển fallback:", err);
-        return await toBase64(file);
     }
+
+    // 2. Chế độ 'imgbb' (Chỉ dùng ImgBB -> Fallback Base64)
+    if (provider === 'imgbb') {
+        try {
+            const imgbbUrl = await uploadToImgbb(file, apiKey);
+            return { url: imgbbUrl, provider: 'imgbb' };
+        } catch (imgbbErr: any) {
+            console.warn("⚠️ Upload ImgBB thất bại, fallback sang Base64:", imgbbErr);
+            const base64Url = await toBase64(file);
+            return { url: base64Url, provider: 'base64', error: imgbbErr?.message };
+        }
+    }
+
+    // 3. Chế độ 'supabase' (Chỉ dùng Supabase Storage -> Fallback Base64)
+    if (provider === 'supabase') {
+        try {
+            const supabaseUrl = await uploadToSupabaseStorage(file);
+            return { url: supabaseUrl, provider: 'supabase' };
+        } catch (supabaseErr: any) {
+            console.warn("⚠️ Upload Supabase thất bại, fallback sang Base64:", supabaseErr);
+            const base64Url = await toBase64(file);
+            return { url: base64Url, provider: 'base64', error: supabaseErr?.message };
+        }
+    }
+
+    const fallbackUrl = await toBase64(file);
+    return { url: fallbackUrl, provider: 'base64' };
+};
+
+export const uploadQuizImage = async (file: File | Blob): Promise<string> => {
+    const res = await uploadQuizImageWithResult(file);
+    return res.url;
 };
 
 export const getPublishedResults = async (limit: number = 20, forceRefresh: boolean = false): Promise<PublishedResult[]> => {
