@@ -2,16 +2,16 @@
 /// <reference types="vite/client" />
 
 import { createClient } from '@supabase/supabase-js';
-import { User, Quiz, Result, Chapter, Question, ExamSession, PublishedResult, Grade, ClassRoom } from '../types';
+import { User, Quiz, Result, Chapter, QuizFolder, Question, ExamSession, PublishedResult, Grade, ClassRoom } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
-let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://buelyuxsztnhrwinrldp.supabase.co').trim();
+let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://lchfhsioxvgkjfsikycl.supabase.co').trim();
 if (cleanedUrl.endsWith('/rest/v1') || cleanedUrl.endsWith('/rest/v1/')) {
     cleanedUrl = cleanedUrl.replace(/\/rest\/v1\/?$/, '');
 }
 const SUPABASE_URL = cleanedUrl;
 
-const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ1ZWx5dXhzenRuaHJ3aW5ybGRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzOTEwMzAsImV4cCI6MjEwNDk2NzAzMH0.J01Qu55HgJDsiChcAY0ZlZkdjSjUXlAN1H82fnyE8Eg').trim();
+const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjaGZoc2lveHZna2pmc2lreWNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NTI3MDksImV4cCI6MjA4MDUyODcwOX0.toOc2ytPzo_cqhpQyd0YOLq4Zvk3BtfdZSziXN__j8Q').trim();
 
 let supabase: any = null;
 
@@ -395,6 +395,8 @@ const QUIZ_METADATA_PROJECTION = `
     data->type,
     data->academicYear,
     data->category,
+    data->folderId,
+    data->folderName,
     data->startTime,
     data->endTime,
     data->durationMinutes,
@@ -420,6 +422,8 @@ const mapRowToQuizMeta = (row: any): Quiz => ({
     type: row.type || 'practice',
     academicYear: row.academicYear || '',
     category: row.category || '',
+    folderId: row.folderId || undefined,
+    folderName: row.folderName || undefined,
     startTime: row.startTime || '',
     endTime: row.endTime || '',
     durationMinutes: typeof row.durationMinutes === 'number' ? row.durationMinutes : (parseInt(row.durationMinutes) || 45),
@@ -893,6 +897,197 @@ export const saveChapter = async (c: Chapter): Promise<void> => {
 export const deleteChapter = async (id: string): Promise<void> => {
   invalidateCache('chapters_all');
   if (supabase) await supabase.from('chapters').delete().eq('id', id);
+};
+
+// --- Quiz Folders (Thư mục đề thi con trong từng Chương) ---
+const FOLDERS_LOCAL_STORAGE_KEY = 'eduquiz_quiz_folders_v1';
+
+export const getLocalFolders = (): QuizFolder[] => {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const saved = localStorage.getItem(FOLDERS_LOCAL_STORAGE_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+export const saveLocalFolders = (folders: QuizFolder[]) => {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(FOLDERS_LOCAL_STORAGE_KEY, JSON.stringify(folders));
+    }
+  } catch (e) {}
+};
+
+export const getQuizFolders = async (grade?: Grade, forceRefresh: boolean = false): Promise<QuizFolder[]> => {
+  const cacheKey = `quiz_folders_${grade || 'all'}`;
+  const now = Date.now();
+  if (!forceRefresh && memoryCache[cacheKey] && memoryCache[cacheKey].expires > now) {
+    return memoryCache[cacheKey].data;
+  }
+
+  let dbFolders: QuizFolder[] = [];
+  if (supabase) {
+    try {
+      let query = supabase.from('quiz_folders').select('data');
+      if (grade && grade !== 'all') {
+        query = query.or(`grade.eq.${grade},grade.eq.all`);
+      }
+      const { data, error } = await query;
+      if (!error && data) {
+        dbFolders = data.map((row: any) => row.data as QuizFolder);
+      }
+    } catch (e) {
+      // Bỏ qua nếu chưa tạo bảng quiz_folders trên Supabase
+    }
+  }
+
+  // Kết hợp cùng dữ liệu local storage để không bao giờ bị mất thư mục
+  const localList = getLocalFolders();
+  const folderMap = new Map<string, QuizFolder>();
+  
+  // Nạp từ local trước
+  localList.forEach(f => {
+    if (f && f.id) folderMap.set(f.id, f);
+  });
+  
+  // Nạp từ DB đè lên
+  dbFolders.forEach(f => {
+    if (f && f.id) folderMap.set(f.id, f);
+  });
+
+  let merged = Array.from(folderMap.values());
+  if (grade && grade !== 'all') {
+    merged = merged.filter(f => !f.grade || f.grade === 'all' || f.grade === grade);
+  }
+
+  merged.sort((a, b) => (a.order || 0) - (b.order || 0) || a.name.localeCompare(b.name));
+  memoryCache[cacheKey] = { data: merged, expires: now + CACHE_TTL };
+  return merged;
+};
+
+export const saveQuizFolder = async (folder: QuizFolder): Promise<void> => {
+  invalidateCache('quiz_folders_');
+  // 1. Lưu vào LocalStorage
+  const current = getLocalFolders();
+  const filtered = current.filter(f => f.id !== folder.id);
+  saveLocalFolders([...filtered, folder]);
+
+  // 2. Lưu vào Supabase nếu có bảng
+  if (supabase) {
+    try {
+      await supabase.from('quiz_folders').upsert({
+        id: folder.id,
+        grade: folder.grade || 'all',
+        data: folder
+      });
+    } catch (e) {
+      console.warn("Không thể lưu quiz_folder lên Supabase (có thể chưa tạo bảng):", e);
+    }
+  }
+};
+
+export const deleteQuizFolder = async (folderId: string): Promise<void> => {
+  invalidateCache('quiz_folders_');
+  invalidateCache('quizzes_meta_');
+  invalidateCache('quizzes_full_');
+  
+  // 1. Xóa khỏi LocalStorage
+  const current = getLocalFolders();
+  saveLocalFolders(current.filter(f => f.id !== folderId));
+
+  // 2. Xóa trên Supabase & Trả các đề thi thuộc folder này về chưa phân thư mục
+  if (supabase) {
+    try {
+      await supabase.from('quiz_folders').delete().eq('id', folderId);
+    } catch (e) {
+      console.warn("Lỗi xóa folder trên Supabase:", e);
+    }
+
+    try {
+      // Tìm các đề thi đang nằm trong thư mục bị xóa
+      const { data: matchedRows } = await supabase
+        .from('quizzes')
+        .select('id, grade, data');
+
+      if (matchedRows && matchedRows.length > 0) {
+        for (const row of matchedRows) {
+          const q = row.data as Quiz;
+          if (q && q.folderId === folderId) {
+            const updatedQuiz: Quiz = {
+              ...q,
+              folderId: undefined,
+              folderName: undefined
+            };
+            updateQuizInCache(updatedQuiz);
+            await supabase.from('quizzes').update({
+              data: updatedQuiz,
+              grade: row.grade || q.grade
+            }).eq('id', row.id);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Lỗi hoàn trả đề thi về vùng chưa phân:", e);
+    }
+  }
+};
+
+// Di chuyển nhanh đề thi vào một thư mục
+export const updateQuizFolderAssignment = async (
+  quizId: string,
+  folderId?: string,
+  folderName?: string,
+  chapterName?: string
+): Promise<void> => {
+  if (!supabase) throw new Error("Mất kết nối Database");
+  const { data, error } = await supabase.from('quizzes').select('id, grade, data').eq('id', quizId).single();
+  if (error || !data) throw new Error("Không tìm thấy đề thi");
+  const currentQuiz = data.data as Quiz;
+  const updatedQuiz: Quiz = {
+    ...currentQuiz,
+    folderId: folderId || undefined,
+    folderName: folderName || undefined,
+    category: chapterName || currentQuiz.category
+  };
+  updateQuizInCache(updatedQuiz);
+  const { error: updateErr } = await supabase.from('quizzes').update({
+    data: updatedQuiz,
+    grade: data.grade
+  }).eq('id', quizId);
+  handleSupabaseError(updateErr, "Di chuyển đề thi vào thư mục");
+};
+
+// Di chuyển hàng loạt đề thi vào thư mục
+export const batchMoveQuizzesToFolder = async (
+  quizIds: string[],
+  folderId?: string,
+  folderName?: string,
+  chapterName?: string
+): Promise<number> => {
+  if (!supabase) throw new Error("Mất kết nối Database");
+  if (quizIds.length === 0) return 0;
+  const { data, error } = await supabase.from('quizzes').select('id, grade, data').in('id', quizIds);
+  if (error || !data) throw new Error("Lỗi khi nạp danh sách đề thi");
+
+  let count = 0;
+  for (const row of data) {
+    const currentQuiz = row.data as Quiz;
+    const updatedQuiz: Quiz = {
+      ...currentQuiz,
+      folderId: folderId || undefined,
+      folderName: folderName || undefined,
+      category: chapterName || currentQuiz.category
+    };
+    updateQuizInCache(updatedQuiz);
+    const { error: updateErr } = await supabase.from('quizzes').update({
+      data: updatedQuiz,
+      grade: row.grade
+    }).eq('id', row.id);
+    if (!updateErr) count++;
+  }
+  return count;
 };
 
 // --- Classroom & Academic Year Management ---
