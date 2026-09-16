@@ -5,13 +5,13 @@ import { createClient } from '@supabase/supabase-js';
 import { User, Quiz, Result, Chapter, QuizFolder, Question, ExamSession, PublishedResult, Grade, ClassRoom } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
-let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://buelyuxsztnhrwinrldp.supabase.co').trim();
+let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://lchfhsioxvgkjfsikycl.supabase.co').trim();
 if (cleanedUrl.endsWith('/rest/v1') || cleanedUrl.endsWith('/rest/v1/')) {
     cleanedUrl = cleanedUrl.replace(/\/rest\/v1\/?$/, '');
 }
 const SUPABASE_URL = cleanedUrl;
 
-const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ1ZWx5dXhzenRuaHJ3aW5ybGRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzOTEwMzAsImV4cCI6MjEwNDk2NzAzMH0.J01Qu55HgJDsiChcAY0ZlZkdjSjUXlAN1H82fnyE8Eg').trim();
+const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjaGZoc2lveHZna2pmc2lreWNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NTI3MDksImV4cCI6MjA4MDUyODcwOX0.toOc2ytPzo_cqhpQyd0YOLq4Zvk3BtfdZSziXN__j8Q').trim();
 
 let supabase: any = null;
 
@@ -414,33 +414,36 @@ const QUIZ_METADATA_PROJECTION = `
     data->orderIndex
 `;
 
-const mapRowToQuizMeta = (row: any): Quiz => ({
-    id: row.id,
-    grade: row.grade || '12',
-    title: row.title || 'Đề thi',
-    description: row.description || '',
-    type: row.type || 'practice',
-    academicYear: row.academicYear || '',
-    category: row.category || '',
-    folderId: row.folderId || undefined,
-    folderName: row.folderName || undefined,
-    startTime: row.startTime || '',
-    endTime: row.endTime || '',
-    durationMinutes: typeof row.durationMinutes === 'number' ? row.durationMinutes : (parseInt(row.durationMinutes) || 45),
-    questionCount: typeof row.questionCount === 'number' ? row.questionCount : (parseInt(row.questionCount) || 0),
-    attemptCount: typeof row.attemptCount === 'number' ? row.attemptCount : (parseInt(row.attemptCount) || 0),
-    createdAt: row.createdAt || new Date().toISOString(),
-    isPublished: row.isPublished === true || row.isPublished === 'true',
-    isMonitored: row.isMonitored === true || row.isMonitored === 'true',
-    isUnlisted: row.isUnlisted === true || row.isUnlisted === 'true',
-    targetType: row.targetType || 'all',
-    assignedClassIds: Array.isArray(row.assignedClassIds) ? row.assignedClassIds : [],
-    assignedClasses: Array.isArray(row.assignedClasses) ? row.assignedClasses : [],
-    maxAttempts: typeof row.maxAttempts === 'number' ? row.maxAttempts : 2,
-    allowReview: row.allowReview ?? true,
-    orderIndex: typeof row.orderIndex === 'number' ? row.orderIndex : 0,
-    questions: [] // Tuyệt đối không tải mảng câu hỏi ở metadata để tiết kiệm 98% băng thông
-});
+const mapRowToQuizMeta = (row: any): Quiz => {
+    const d = (row && row.data) ? row.data : (row || {});
+    return {
+        id: row.id || d.id,
+        grade: row.grade || d.grade || '12',
+        title: d.title || row.title || 'Đề thi',
+        description: d.description || row.description || '',
+        type: d.type || row.type || 'practice',
+        academicYear: d.academicYear || row.academicYear || '',
+        category: d.category || row.category || '',
+        folderId: d.folderId || row.folderId || undefined,
+        folderName: d.folderName || row.folderName || undefined,
+        startTime: d.startTime || row.startTime || '',
+        endTime: d.endTime || row.endTime || '',
+        durationMinutes: typeof d.durationMinutes === 'number' ? d.durationMinutes : (parseInt(d.durationMinutes || row.durationMinutes) || 45),
+        questionCount: typeof d.questionCount === 'number' ? d.questionCount : (typeof row.questionCount === 'number' ? row.questionCount : (parseInt(d.questionCount || row.questionCount) || (Array.isArray(d.questions) ? d.questions.length : 0))),
+        attemptCount: typeof d.attemptCount === 'number' ? d.attemptCount : (parseInt(d.attemptCount || row.attemptCount) || 0),
+        createdAt: d.createdAt || row.createdAt || new Date().toISOString(),
+        isPublished: d.isPublished === true || d.isPublished === 'true' || row.isPublished === true || row.isPublished === 'true',
+        isMonitored: d.isMonitored === true || d.isMonitored === 'true' || row.isMonitored === true || row.isMonitored === 'true',
+        isUnlisted: d.isUnlisted === true || d.isUnlisted === 'true' || row.isUnlisted === true || row.isUnlisted === 'true',
+        targetType: d.targetType || row.targetType || 'all',
+        assignedClassIds: Array.isArray(d.assignedClassIds) ? d.assignedClassIds : (Array.isArray(row.assignedClassIds) ? row.assignedClassIds : []),
+        assignedClasses: Array.isArray(d.assignedClasses) ? d.assignedClasses : (Array.isArray(row.assignedClasses) ? row.assignedClasses : []),
+        maxAttempts: typeof d.maxAttempts === 'number' ? d.maxAttempts : (typeof row.maxAttempts === 'number' ? row.maxAttempts : 2),
+        allowReview: d.allowReview ?? row.allowReview ?? true,
+        orderIndex: typeof d.orderIndex === 'number' ? d.orderIndex : (typeof row.orderIndex === 'number' ? row.orderIndex : 0),
+        questions: [] // Tuyệt đối không tải mảng câu hỏi ở metadata để tiết kiệm bộ nhớ và băng thông
+    };
+};
 
 // --- Quizzes ---
 export const getQuizzesMetadataPage = async (page: number, pageSize: number = 20, grade?: Grade): Promise<{ data: Quiz[], total: number }> => {
@@ -450,7 +453,7 @@ export const getQuizzesMetadataPage = async (page: number, pageSize: number = 20
     const to = from + pageSize - 1;
 
     let query = supabase.from('quizzes')
-      .select(QUIZ_METADATA_PROJECTION, { count: 'exact' })
+      .select('id, grade, data', { count: 'exact' })
       .order('id', { ascending: false })
       .range(from, to);
       
@@ -570,7 +573,7 @@ export const getQuizzesMetadata = async (grade?: Grade, forceRefresh: boolean = 
 
     while (hasMore) {
         let query = supabase.from('quizzes')
-            .select(QUIZ_METADATA_PROJECTION)
+            .select('id, grade, data')
             .order('id', { ascending: false })
             .range(from, from + step - 1);
             
