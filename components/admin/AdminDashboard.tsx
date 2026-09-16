@@ -1,6 +1,6 @@
 
 import { 
-  getQuizzesMetadata, getQuizById, deleteQuiz, saveQuiz, updateQuiz, uploadQuizImage,
+  getQuizzesMetadata, getQuizzes, getQuizById, deleteQuiz, saveQuiz, updateQuiz, uploadQuizImage,
   getUsers, saveUser, deleteUser, changePassword, getUsersPage, saveUsersBatch,
   getResultsMetadata, getResultById, deleteResult, getResultsMetadataPage,
   getChapters, saveChapter, deleteChapter,
@@ -47,7 +47,7 @@ import QuizPreviewModal from './QuizPreviewModal';
 
 type AdminTab = 'quizzes' | 'classes' | 'students' | 'results' | 'monitor' | 'chapters' | 'bank' | 'ai';
 
-const SESSION_KEY_QUIZ_FILTERS = 'eduquiz_admin_quiz_filters_v2';
+const SESSION_KEY_QUIZ_FILTERS = 'eduquiz_admin_quiz_filters_v5';
 
 const getInitialQuizFilters = () => {
   try {
@@ -56,19 +56,19 @@ const getInitialQuizFilters = () => {
     if (raw) {
       const parsed = JSON.parse(raw);
       return {
-        academicYear: parsed.academicYear || getCurrentAcademicYear(),
-        grade: (parsed.grade as Grade | 'all') || '10',
+        academicYear: parsed.academicYear || 'all',
+        grade: (parsed.grade as Grade | 'all') || 'all',
         chapter: parsed.chapter || 'all',
         search: parsed.search || '',
         status: (parsed.status as QuizStatusFilter) || 'all',
         viewMode: (parsed.viewMode as 'folders' | 'flat') || 'folders',
-        activeFolderId: parsed.activeFolderId || null
+        activeFolderId: null
       };
     }
   } catch (e) {}
   return {
-    academicYear: getCurrentAcademicYear(),
-    grade: '10' as Grade | 'all',
+    academicYear: 'all',
+    grade: 'all' as Grade | 'all',
     chapter: 'all',
     search: '',
     status: 'all' as QuizStatusFilter,
@@ -117,8 +117,19 @@ export default function AdminDashboard() {
     } catch (e) {}
   }, [qAcademicYearFilter, qGradeFilter, qChapterFilter, qSearch, qStatusFilter, qViewMode, qActiveFolderId]);
 
-  // Data states
-  const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+  // Data states với preload từ cache local để hiển thị ngay lập tức (0ms)
+  const [quizzes, setQuizzes] = useState<Quiz[]>(() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem('quizzes_meta_all') || localStorage.getItem('quizzes_full_all');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed?.data)) return parsed.data;
+        }
+      }
+    } catch {}
+    return [];
+  });
   const [classes, setClasses] = useState<ClassRoom[]>([]);
   const [students, setStudents] = useState<User[]>([]);
   const [studentsTotal, setStudentsTotal] = useState(0);
@@ -127,7 +138,15 @@ export default function AdminDashboard() {
   const [resultsTotal, setResultsTotal] = useState(0);
   const [resultsPage, setResultsPage] = useState(1);
   const [chapters, setChapters] = useState<Chapter[]>([]);
-  const [folders, setFolders] = useState<QuizFolder[]>([]);
+  const [folders, setFolders] = useState<QuizFolder[]>(() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem('eduquiz_quiz_folders_v1');
+        if (raw) return JSON.parse(raw);
+      }
+    } catch {}
+    return [];
+  });
   const [bankQuestions, setBankQuestions] = useState<Question[]>([]);
 
   // Lazy loading data with memory cache & forceRefresh
@@ -136,19 +155,26 @@ export default function AdminDashboard() {
     setIsDataLoading(true);
     try {
       if (tab === 'quizzes') {
-        const targetGrade = qGradeFilterRef.current;
-        const [q, c, r, cls, fld] = await Promise.all([
-          getQuizzesMetadata(targetGrade, forceRefresh), 
+        const [q, c, cls, fld] = await Promise.all([
+          getQuizzesMetadata('all', forceRefresh), 
           getChapters(forceRefresh),
-          getResultsMetadata('all', 10000, forceRefresh),
           getClasses(forceRefresh),
-          getQuizFolders(targetGrade, forceRefresh)
+          getQuizFolders('all', forceRefresh)
         ]);
-        setQuizzes(q);
-        setChapters(c);
-        setResults(r);
-        setClasses(cls);
-        setFolders(fld);
+        if (q && q.length > 0) {
+          setQuizzes(q);
+        } else {
+          // Fallback nếu metadata rỗng thì thử lấy full quizzes
+          const full = await getQuizzes('all', forceRefresh);
+          if (full && full.length > 0) setQuizzes(full);
+        }
+        setChapters(c || []);
+        setClasses(cls || []);
+        setFolders(fld || []);
+        // Tải kết quả bài thi trong background không làm treo giao diện
+        getResultsMetadata('all', 2000, forceRefresh).then(r => {
+          setResults(r || []);
+        }).catch(err => console.warn("Lỗi load results meta background:", err));
       } else if (tab === 'classes') {
         const [cls, u, q, r, c] = await Promise.all([
           getClasses(forceRefresh),
@@ -316,20 +342,6 @@ export default function AdminDashboard() {
   const [rGradeFilter, setRGradeFilter] = useState<Grade | 'all'>('all');
   const [rChapterFilter, setRChapterFilter] = useState('all');
   const [rQuizFilter, setRQuizFilter] = useState('all');
-
-  // Dynamic Grade & Folder on-demand fetching when switching grades (Bandwidth Optimization)
-  useEffect(() => {
-    if (activeTab === 'quizzes' && isDatabaseConnected()) {
-      let isMounted = true;
-      getQuizzesMetadata(qGradeFilter).then(data => {
-        if (isMounted) setQuizzes(data);
-      });
-      getQuizFolders(qGradeFilter).then(data => {
-        if (isMounted) setFolders(data);
-      });
-      return () => { isMounted = false; };
-    }
-  }, [qGradeFilter, activeTab]);
 
   // Server-side filtering for results
   useEffect(() => {
@@ -1394,7 +1406,15 @@ export default function AdminDashboard() {
             ) : (
               <div className="space-y-6">
                 <div className="flex justify-between items-center">
-                   <h1 className="text-xl font-black text-slate-800 uppercase italic">QUẢN LÝ ĐỀ THI</h1>
+                   <div className="flex items-center gap-3">
+                     <h1 className="text-xl font-black text-slate-800 uppercase italic">QUẢN LÝ ĐỀ THI</h1>
+                     {isDataLoading && (
+                       <span className="flex items-center gap-1.5 text-[10px] font-black uppercase text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
+                         <Loader2 size={11} className="animate-spin" />
+                         Đang đồng bộ...
+                       </span>
+                     )}
+                   </div>
                    <div className="flex gap-3">
                       <button 
                         onClick={handleSyncAllQuizzes} 
@@ -1409,27 +1429,24 @@ export default function AdminDashboard() {
                       </button>
                    </div>
                 </div>
-                {isDataLoading ? (
-                    <div className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-blue-500" size={40}/><p className="mt-4 text-[10px] font-black uppercase text-slate-400">Đang tải Cloud...</p></div>
-                ) : (
-                    <QuizList 
-                        quizzes={quizzes} results={results} chapters={chapters} classes={classes}
-                        folders={folders}
-                        onEdit={handleEditQuiz} onDelete={handleDeleteQuiz} onPreview={handlePreviewQuiz}
-                        onQuickAssignTarget={handleQuickAssignTarget}
-                        onToggleAllowReview={handleToggleAllowReview}
-                        onQuickUpdateAcademicYear={handleQuickUpdateAcademicYear}
-                        onSaveFolder={handleSaveFolder}
-                        onDeleteFolder={handleDeleteFolder}
-                        onBatchMoveToFolder={handleBatchMoveToFolder}
-                        qAcademicYearFilter={qAcademicYearFilter} setQAcademicYearFilter={setQAcademicYearFilter}
-                        qSearch={qSearch} setQSearch={setQSearch} qGradeFilter={qGradeFilter} setQGradeFilter={setQGradeFilter}
-                        qChapterFilter={qChapterFilter} setQChapterFilter={setQChapterFilter}
-                        qStatusFilter={qStatusFilter} setQStatusFilter={setQStatusFilter}
-                        viewMode={qViewMode} setViewMode={setQViewMode}
-                        activeFolderId={qActiveFolderId} setActiveFolderId={setQActiveFolderId}
-                    />
-                )}
+                
+                <QuizList 
+                    quizzes={quizzes} results={results} chapters={chapters} classes={classes}
+                    folders={folders}
+                    onEdit={handleEditQuiz} onDelete={handleDeleteQuiz} onPreview={handlePreviewQuiz}
+                    onQuickAssignTarget={handleQuickAssignTarget}
+                    onToggleAllowReview={handleToggleAllowReview}
+                    onQuickUpdateAcademicYear={handleQuickUpdateAcademicYear}
+                    onSaveFolder={handleSaveFolder}
+                    onDeleteFolder={handleDeleteFolder}
+                    onBatchMoveToFolder={handleBatchMoveToFolder}
+                    qAcademicYearFilter={qAcademicYearFilter} setQAcademicYearFilter={setQAcademicYearFilter}
+                    qSearch={qSearch} setQSearch={setQSearch} qGradeFilter={qGradeFilter} setQGradeFilter={setQGradeFilter}
+                    qChapterFilter={qChapterFilter} setQChapterFilter={setQChapterFilter}
+                    qStatusFilter={qStatusFilter} setQStatusFilter={setQStatusFilter}
+                    viewMode={qViewMode} setViewMode={setQViewMode}
+                    activeFolderId={qActiveFolderId} setActiveFolderId={setQActiveFolderId}
+                />
               </div>
             )
           )}
@@ -1483,51 +1500,59 @@ export default function AdminDashboard() {
 
           {activeTab === 'students' && (
             <div className="space-y-6">
-                <h1 className="text-xl font-black text-slate-800 uppercase italic">DANH SÁCH HỌC SINH</h1>
-                {isDataLoading && students.length === 0 ? (
-                    <div className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-blue-500" size={40}/><p className="mt-4 text-[10px] font-black uppercase text-slate-400">Đang tải...</p></div>
-                ) : (
-                    <StudentManager 
-                        students={students} results={results} quizzes={quizzes} classes={classes}
-                        sSearch={sSearch} setSSearch={setSSearch} sGradeFilter={sGradeFilter} setSGradeFilter={setSGradeFilter}
-                        onRefresh={() => loadTabData('students')}
-                        onAdd={() => { setSelectedStudent(null); setStudentForm({fullName: '', studentCode: '', grade: '12', password: '123', classId: '', className: '', academicYear: ''}); setIsStudentModalOpen(true); }}
-                        onImportCsv={handleImportCsv} onViewDetail={setViewingStudent}
-                        onEdit={(u) => { setSelectedStudent(u); setStudentForm({fullName: u.fullName, studentCode: u.studentCode || '', grade: u.grade || '12', password: u.password, classId: u.classId || '', className: u.className || '', academicYear: u.academicYear || ''}); setIsStudentModalOpen(true); }}
-                        onDelete={handleDeleteStudent} 
-                        onBulkDelete={handleDeleteStudentsBatch}
-                        onResetPassword={handleResetPassword}
-                        onBulkAssignClass={handleBulkAssignClass}
-                        totalCount={studentsTotal}
-                        onLoadMore={handleLoadMoreStudents}
-                        isMoreLoading={isDataLoading}
-                    />
-                )}
+                <div className="flex items-center gap-3">
+                  <h1 className="text-xl font-black text-slate-800 uppercase italic">DANH SÁCH HỌC SINH</h1>
+                  {isDataLoading && (
+                    <span className="flex items-center gap-1.5 text-[10px] font-black uppercase text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
+                      <Loader2 size={11} className="animate-spin" />
+                      Đang đồng bộ...
+                    </span>
+                  )}
+                </div>
+                <StudentManager 
+                    students={students} results={results} quizzes={quizzes} classes={classes}
+                    sSearch={sSearch} setSSearch={setSSearch} sGradeFilter={sGradeFilter} setSGradeFilter={setSGradeFilter}
+                    onRefresh={() => loadTabData('students')}
+                    onAdd={() => { setSelectedStudent(null); setStudentForm({fullName: '', studentCode: '', grade: '12', password: '123', classId: '', className: '', academicYear: ''}); setIsStudentModalOpen(true); }}
+                    onImportCsv={handleImportCsv} onViewDetail={setViewingStudent}
+                    onEdit={(u) => { setSelectedStudent(u); setStudentForm({fullName: u.fullName, studentCode: u.studentCode || '', grade: u.grade || '12', password: u.password, classId: u.classId || '', className: u.className || '', academicYear: u.academicYear || ''}); setIsStudentModalOpen(true); }}
+                    onDelete={handleDeleteStudent} 
+                    onBulkDelete={handleDeleteStudentsBatch}
+                    onResetPassword={handleResetPassword}
+                    onBulkAssignClass={handleBulkAssignClass}
+                    totalCount={studentsTotal}
+                    onLoadMore={handleLoadMoreStudents}
+                    isMoreLoading={isDataLoading}
+                />
             </div>
           )}
 
           {activeTab === 'results' && (
              <div className="space-y-6">
-                <h1 className="text-xl font-black text-slate-800 uppercase italic">KẾT QUẢ HỌC TẬP</h1>
-                {isDataLoading && results.length === 0 ? (
-                    <div className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-blue-500" size={40}/><p className="mt-4 text-[10px] font-black uppercase text-slate-400">Đang tải...</p></div>
-                ) : (
-                    <ResultsBoard 
-                        results={results} quizzes={quizzes} users={students} chapters={chapters}
-                        rGradeFilter={rGradeFilter} setRGradeFilter={setRGradeFilter}
-                        rChapterFilter={rChapterFilter} setRChapterFilter={setRChapterFilter}
-                        rQuizFilter={rQuizFilter} setRQuizFilter={setRQuizFilter}
-                        rSearch={rSearch} setRSearch={setRSearch}
-                        onRefresh={() => loadTabData('results')}
-                        onClearCache={clearLocalCache}
-                        onViewHistory={(name, code, title, history) => setHistoryData({ studentName: name, studentCode: code, quizTitle: title, history })}
-                        onDeleteResult={handleDeleteResultBatch}
-                        onImportCsv={handleImportCsv}
-                        totalCount={resultsTotal}
-                        onLoadMore={handleLoadMoreResults}
-                        isMoreLoading={isDataLoading}
-                    />
-                )}
+                <div className="flex items-center gap-3">
+                  <h1 className="text-xl font-black text-slate-800 uppercase italic">KẾT QUẢ HỌC TẬP</h1>
+                  {isDataLoading && (
+                    <span className="flex items-center gap-1.5 text-[10px] font-black uppercase text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
+                      <Loader2 size={11} className="animate-spin" />
+                      Đang đồng bộ...
+                    </span>
+                  )}
+                </div>
+                <ResultsBoard 
+                    results={results} quizzes={quizzes} users={students} chapters={chapters}
+                    rGradeFilter={rGradeFilter} setRGradeFilter={setRGradeFilter}
+                    rChapterFilter={rChapterFilter} setRChapterFilter={setRChapterFilter}
+                    rQuizFilter={rQuizFilter} setRQuizFilter={setRQuizFilter}
+                    rSearch={rSearch} setRSearch={setRSearch}
+                    onRefresh={() => loadTabData('results')}
+                    onClearCache={clearLocalCache}
+                    onViewHistory={(name, code, title, history) => setHistoryData({ studentName: name, studentCode: code, quizTitle: title, history })}
+                    onDeleteResult={handleDeleteResultBatch}
+                    onImportCsv={handleImportCsv}
+                    totalCount={resultsTotal}
+                    onLoadMore={handleLoadMoreResults}
+                    isMoreLoading={isDataLoading}
+                />
              </div>
           )}
 
@@ -1538,7 +1563,15 @@ export default function AdminDashboard() {
           {activeTab === 'bank' && (
             <div className="space-y-6">
                 <div className="flex justify-between items-center">
-                   <h1 className="text-xl font-black text-slate-800 uppercase italic">NGÂN HÀNG CÂU HỎI</h1>
+                   <div className="flex items-center gap-3">
+                     <h1 className="text-xl font-black text-slate-800 uppercase italic">NGÂN HÀNG CÂU HỎI</h1>
+                     {isDataLoading && (
+                       <span className="flex items-center gap-1.5 text-[10px] font-black uppercase text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
+                         <Loader2 size={11} className="animate-spin" />
+                         Đang đồng bộ...
+                       </span>
+                     )}
+                   </div>
                    <button 
                       onClick={() => handleSyncBank(false)} 
                       disabled={isSyncing}
@@ -1548,21 +1581,17 @@ export default function AdminDashboard() {
                       CẬP NHẬT TỪ ĐỀ THI
                    </button>
                 </div>
-                {isDataLoading ? (
-                    <div className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-blue-500" size={40}/><p className="mt-4 text-[10px] font-black uppercase text-slate-400">Đang tải...</p></div>
-                ) : (
-                    <QuestionBank 
-                        questions={allAvailableQuestions} chapters={chapters} bGradeFilter={bGradeFilter} setBGradeFilter={setBGradeFilter}
-                        bChapterFilter={bChapterFilter} setBChapterFilter={setBChapterFilter}
-                        bTypeFilter={bTypeFilter} setBTypeFilter={setBTypeFilter} bSearch={bSearch} setBSearch={setBSearch}
-                        onAddMultiple={(qs) => { 
-                            setQuestions(prev => [...prev, ...qs]); 
-                            setActiveTab('quizzes'); 
-                            setIsEditingQuiz(true); 
-                        }}
-                        onOpenMatrixGenerator={() => setActiveTab('ai')}
-                    />
-                )}
+                <QuestionBank 
+                    questions={allAvailableQuestions} chapters={chapters} bGradeFilter={bGradeFilter} setBGradeFilter={setBGradeFilter}
+                    bChapterFilter={bChapterFilter} setBChapterFilter={setBChapterFilter}
+                    bTypeFilter={bTypeFilter} setBTypeFilter={setBTypeFilter} bSearch={bSearch} setBSearch={setBSearch}
+                    onAddMultiple={(qs) => { 
+                        setQuestions(prev => [...prev, ...qs]); 
+                        setActiveTab('quizzes'); 
+                        setIsEditingQuiz(true); 
+                    }}
+                    onOpenMatrixGenerator={() => setActiveTab('ai')}
+                />
             </div>
           )}
         </div>
