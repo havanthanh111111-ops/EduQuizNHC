@@ -212,55 +212,73 @@ export default function QuizList({
         if (qChapterFilter && qChapterFilter !== 'all') {
             return qChapterFilter;
         }
-        if (relevantChapters.length > 0) {
-            return relevantChapters[0].name;
-        }
         return 'TẤT CẢ CHƯƠNG';
-    }, [qChapterFilter, relevantChapters]);
+    }, [qChapterFilter]);
 
     // Lọc danh sách thư mục hiển thị theo Khối & Chương đang chọn
     const displayedFolders = useMemo(() => {
         return folders.filter(f => {
-            const matchGrade = qGradeFilter === 'all' || !f.grade || f.grade === 'all' || f.grade === qGradeFilter;
+            const matchGrade = qGradeFilter === 'all' || !f.grade || f.grade === 'all' || String(f.grade) === String(qGradeFilter);
             const matchChapter = qChapterFilter === 'all' || !f.chapterName || (f.chapterName && f.chapterName.trim().toLowerCase() === qChapterFilter.trim().toLowerCase());
             return matchGrade && matchChapter;
         });
     }, [folders, qGradeFilter, qChapterFilter]);
 
+    // Khớp đề thi vào thư mục (chính xác theo ID hoặc theo tên folder)
+    const isQuizInFolder = (q: Quiz, folder: QuizFolder) => {
+        if (q.folderId && q.folderId === folder.id) return true;
+        if (folder.name && q.folderName && q.folderName.trim().toLowerCase() === folder.name.trim().toLowerCase()) {
+            return true;
+        }
+        return false;
+    };
+
+    // Đếm số đề trong từng thư mục (Đếm chính xác tuyệt đối, khớp với khi mở thư mục)
+    const getFolderQuizCount = (folder: QuizFolder) => {
+        return uniqueQuizzes.filter(q => isQuizInFolder(q, folder)).length;
+    };
+
+    // Số đề chưa phân thư mục
+    const unassignedQuizzes = useMemo(() => {
+        return uniqueQuizzes.filter(q => {
+            const isUnassigned = !q.folderId && !q.folderName;
+            if (!isUnassigned) return false;
+            const matchGrade = qGradeFilter === 'all' || !q.grade || q.grade === 'all' || String(q.grade) === String(qGradeFilter);
+            const matchChapter = qChapterFilter === 'all' || (q.category && q.category.trim().toLowerCase() === qChapterFilter.trim().toLowerCase());
+            return matchGrade && matchChapter;
+        });
+    }, [uniqueQuizzes, qGradeFilter, qChapterFilter]);
+
     // Lọc danh sách đề thi tổng thể
     const filtered = useMemo(() => {
         return uniqueQuizzes.filter(q => {
-            const matchGrade = qGradeFilter === 'all' || !q.grade || q.grade === 'all' || q.grade === qGradeFilter;
-            const matchYear = !qAcademicYearFilter || qAcademicYearFilter === 'all' || 
-              (qAcademicYearFilter === 'none' ? !q.academicYear : q.academicYear === qAcademicYearFilter);
             const matchSearch = !qSearch || q.title.toLowerCase().includes(qSearch.toLowerCase());
 
-            // Lọc theo thư mục nếu đang mở 1 thư mục cụ thể
-            let matchFolder = true;
+            // KHI ĐANG MỞ MỘT THƯ MỤC CỤ THỂ
             if (activeFolderId) {
                 if (activeFolderId === 'unassigned') {
-                    matchFolder = !q.folderId && !q.folderName;
+                    const isUnassigned = !q.folderId && !q.folderName;
+                    const matchGrade = qGradeFilter === 'all' || !q.grade || q.grade === 'all' || String(q.grade) === String(qGradeFilter);
+                    const matchChapter = qChapterFilter === 'all' || (q.category && q.category.trim().toLowerCase() === qChapterFilter.trim().toLowerCase());
+                    return isUnassigned && matchGrade && matchChapter && matchSearch;
                 } else {
                     const activeF = folders.find(f => f.id === activeFolderId);
                     if (activeF) {
-                        const matchFolderId = Boolean(q.folderId && q.folderId === activeF.id);
-                        const matchFolderName = Boolean(
-                            activeF.name && 
-                            q.folderName && 
-                            q.folderName.trim().toLowerCase() === activeF.name.trim().toLowerCase() &&
-                            (!activeF.chapterName || !q.category || q.category.trim().toLowerCase() === activeF.chapterName.trim().toLowerCase())
-                        );
-                        matchFolder = matchFolderId || matchFolderName;
+                        const inThisFolder = isQuizInFolder(q, activeF);
+                        if (!inThisFolder) return false;
+                        // Trong thư mục, chỉ lọc theo từ khóa tìm kiếm để không bị mất đề
+                        return matchSearch;
                     } else {
-                        matchFolder = q.folderId === activeFolderId;
+                        return (q.folderId === activeFolderId) && matchSearch;
                     }
                 }
             }
 
-            // Khi đang mở 1 thư mục cụ thể (activeFolderId), không cần lọc lại matchChapter vì thư mục đã xác định ngữ cảnh
-            const matchChapter = (activeFolderId && activeFolderId !== 'unassigned')
-                ? true
-                : (qChapterFilter === 'all' || (q.category && q.category.trim().toLowerCase() === qChapterFilter.trim().toLowerCase()));
+            // KHI Ở CHẾ ĐỘ XEM TOÀN BỘ DANH SÁCH (FLAT LIST)
+            const matchGrade = qGradeFilter === 'all' || !q.grade || q.grade === 'all' || String(q.grade) === String(qGradeFilter);
+            const matchYear = !qAcademicYearFilter || qAcademicYearFilter === 'all' || 
+              (qAcademicYearFilter === 'none' ? !q.academicYear : (q.academicYear === qAcademicYearFilter || (!q.academicYear && qAcademicYearFilter === currentAcademicYear)));
+            const matchChapter = qChapterFilter === 'all' || (q.category && q.category.trim().toLowerCase() === qChapterFilter.trim().toLowerCase());
 
             const state = getQuizState(q);
             let matchStatus = true;
@@ -278,40 +296,9 @@ export default function QuizList({
                 matchStatus = q.isPublished && Boolean(q.isUnlisted);
             }
 
-            return matchGrade && matchYear && matchChapter && matchSearch && matchStatus && matchFolder;
+            return matchGrade && matchYear && matchChapter && matchSearch && matchStatus;
         }).sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     }, [uniqueQuizzes, qGradeFilter, qAcademicYearFilter, qChapterFilter, qSearch, qStatusFilter, activeFolderId, folders]);
-
-    // Đếm số đề trong từng thư mục
-    const getFolderQuizCount = (folder: QuizFolder) => {
-        return uniqueQuizzes.filter(q => {
-            const matchGrade = qGradeFilter === 'all' || !q.grade || q.grade === 'all' || q.grade === qGradeFilter;
-            const matchYear = !qAcademicYearFilter || qAcademicYearFilter === 'all' || (qAcademicYearFilter === 'none' ? !q.academicYear : q.academicYear === qAcademicYearFilter);
-            
-            // Khớp theo folderId trực tiếp
-            const matchFolderId = Boolean(q.folderId && q.folderId === folder.id);
-            // Hoặc khớp theo tên folder + tên chương (nếu đề chưa gán folderId cụ thể)
-            const matchFolderName = Boolean(
-                folder.name && 
-                q.folderName && 
-                q.folderName.trim().toLowerCase() === folder.name.trim().toLowerCase() && 
-                (!folder.chapterName || !q.category || q.category.trim().toLowerCase() === folder.chapterName.trim().toLowerCase())
-            );
-
-            return matchGrade && matchYear && (matchFolderId || matchFolderName);
-        }).length;
-    };
-
-    // Số đề chưa phân thư mục trong chương hiện tại
-    const unassignedQuizzesInChapter = useMemo(() => {
-        return uniqueQuizzes.filter(q => {
-            const matchGrade = qGradeFilter === 'all' || !q.grade || q.grade === 'all' || q.grade === qGradeFilter;
-            const matchYear = !qAcademicYearFilter || qAcademicYearFilter === 'all' || (qAcademicYearFilter === 'none' ? !q.academicYear : q.academicYear === qAcademicYearFilter);
-            const matchChapter = qChapterFilter === 'all' || (q.category && q.category.trim().toLowerCase() === qChapterFilter.trim().toLowerCase());
-            const isUnassigned = !q.folderId && !q.folderName;
-            return matchGrade && matchYear && matchChapter && isUnassigned;
-        });
-    }, [uniqueQuizzes, qGradeFilter, qAcademicYearFilter, qChapterFilter]);
 
     const stats = useMemo(() => {
         let total = uniqueQuizzes.length;
@@ -521,9 +508,10 @@ export default function QuizList({
                 <div className="flex flex-wrap sm:flex-nowrap gap-3 w-full">
                     <select 
                         className="flex-1 px-4 py-3 bg-amber-50 border-2 border-amber-300 text-amber-950 font-black rounded-xl text-[10px] uppercase outline-none shadow-sm focus:border-blue-500" 
-                        value={qAcademicYearFilter || currentAcademicYear} 
+                        value={qAcademicYearFilter || 'all'} 
                         onChange={e => setQAcademicYearFilter && setQAcademicYearFilter(e.target.value)}
                     >
+                        <option value="all">🗄️ TẤT CẢ NIÊN KHÓA ({uniqueQuizzes.length} ĐỀ)</option>
                         <option value={currentAcademicYear}>⭐ NIÊN KHÓA {currentAcademicYear} (HIỆN HÀNH)</option>
                         <option value="2026-2027">📅 NĂM HỌC 2026-2027</option>
                         <option value="2025-2026">📅 NĂM HỌC 2025-2026</option>
@@ -532,7 +520,6 @@ export default function QuizList({
                         {availableYears.filter(y => ![currentAcademicYear, '2025-2026', '2024-2025', '2026-2027', '2027-2028'].includes(y)).map(yr => (
                             <option key={yr} value={yr}>📅 NĂM HỌC {yr}</option>
                         ))}
-                        <option value="all">🗄️ TẤT CẢ CÁC NĂM (KHO LƯU TRỮ)</option>
                         <option value="none">⚠️ CHƯA GẮN NĂM</option>
                     </select>
                     <select 
@@ -605,7 +592,7 @@ export default function QuizList({
                                 </div>
                                 <div className="flex items-center gap-3 flex-wrap">
                                     <h3 className="text-sm sm:text-base font-black uppercase text-slate-800 tracking-tight flex items-center gap-2">
-                                        <span>THƯ MỤC TRONG CHƯƠNG:</span>
+                                        <span>{qChapterFilter === 'all' ? 'DANH SÁCH THƯ MỤC:' : 'THƯ MỤC TRONG:'}</span>
                                         <span className="text-amber-700">{currentChapterDisplayName}</span>
                                     </h3>
                                     <span className="px-3 py-1 bg-amber-100/90 text-amber-900 border border-amber-200 text-xs font-black rounded-full shadow-xs">
@@ -627,9 +614,9 @@ export default function QuizList({
                         </div>
                         
                         <div className="flex items-center gap-2 text-xs font-bold text-slate-500 pt-1">
-                            <span className="text-amber-600">💡 Mẹo:</span>
+                            <span className="text-amber-600">💡 Hướng dẫn:</span>
                             <span className="text-slate-600">
-                                Bấm vào thư mục hoặc bấm <strong className="text-amber-600 font-black">"Mở thư mục"</strong> để xem danh sách đề thi
+                                Nhấp vào thư mục để xem toàn bộ đề thi bên trong. Bạn có thể chọn nhiều đề và bấm <strong>"Chuyển Thư Mục"</strong> để gom nhóm đề thi nhanh chóng.
                             </span>
                         </div>
                     </div>
@@ -685,8 +672,22 @@ export default function QuizList({
                                             </div>
                                         </div>
 
+                                        {/* Badges: Khối & Chương */}
+                                        <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
+                                            {folder.grade && (
+                                                <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 text-[8px] font-black uppercase rounded">
+                                                    {folder.grade === 'all' ? 'Tất cả khối' : `Khối ${folder.grade}`}
+                                                </span>
+                                            )}
+                                            {folder.chapterName && (
+                                                <span className="px-1.5 py-0.5 bg-blue-50 text-blue-700 text-[8px] font-bold truncate max-w-[120px] rounded">
+                                                    {folder.chapterName}
+                                                </span>
+                                            )}
+                                        </div>
+
                                         {/* Tên Thư mục */}
-                                        <h4 className="text-[14px] font-bold text-slate-800 mt-3 group-hover:text-amber-600 transition-colors leading-snug line-clamp-2 min-h-[2.5rem]">
+                                        <h4 className="text-[14px] font-bold text-slate-800 mt-2 group-hover:text-amber-600 transition-colors leading-snug line-clamp-2 min-h-[2.5rem]">
                                             {folder.name}
                                         </h4>
 
@@ -699,7 +700,7 @@ export default function QuizList({
 
                                     {/* Footer: Số lượng đề thi & Nút Mở thư mục */}
                                     <div className="flex items-center justify-between pt-3 border-t border-slate-100 mt-3">
-                                        <span className="text-xs font-semibold text-slate-500">
+                                        <span className="text-xs font-black text-slate-700">
                                             {count} đề thi
                                         </span>
                                         <button
@@ -718,7 +719,7 @@ export default function QuizList({
                         })}
 
                         {/* Thư mục đề thi chưa phân loại (nếu có đề chưa gán folder) */}
-                        {unassignedQuizzesInChapter.length > 0 && (
+                        {unassignedQuizzes.length > 0 && (
                             <div
                                 onClick={() => setActiveFolderId('unassigned')}
                                 className="bg-slate-50 border border-dashed border-slate-300 hover:border-slate-400 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col justify-between group"
@@ -733,13 +734,13 @@ export default function QuizList({
                                     </h4>
 
                                     <p className="text-[11px] text-slate-400 font-normal mt-1 line-clamp-2">
-                                        Xem và chuyển các đề vào thư mục tương ứng.
+                                        Xem và chọn nhiều đề để chuyển nhanh vào các thư mục.
                                     </p>
                                 </div>
 
                                 <div className="flex items-center justify-between pt-3 border-t border-slate-200 mt-3">
-                                    <span className="text-xs font-semibold text-slate-500">
-                                        {unassignedQuizzesInChapter.length} đề thi
+                                    <span className="text-xs font-black text-slate-600">
+                                        {unassignedQuizzes.length} đề thi
                                     </span>
                                     <button
                                         onClick={(e) => {
@@ -748,7 +749,7 @@ export default function QuizList({
                                         }}
                                         className="px-3.5 py-1.5 bg-slate-700 hover:bg-slate-800 text-white font-bold text-[10.5px] uppercase rounded-xl shadow-xs flex items-center gap-1 transition-all"
                                     >
-                                        <span>XEM ĐỀ</span>
+                                        <span>XEM & PHÂN LOẠI</span>
                                         <ChevronRight size={13} strokeWidth={2.5} />
                                     </button>
                                 </div>
@@ -756,7 +757,7 @@ export default function QuizList({
                         )}
 
                         {/* Nút Tạo thư mục nhanh dạng card nếu chưa có thư mục */}
-                        {displayedFolders.length === 0 && unassignedQuizzesInChapter.length === 0 && (
+                        {displayedFolders.length === 0 && unassignedQuizzes.length === 0 && (
                             <div
                                 onClick={() => {
                                     setEditingFolder(null);
@@ -768,14 +769,14 @@ export default function QuizList({
                                     <FolderPlus size={32} />
                                 </div>
                                 <h3 className="text-base font-black text-slate-800 uppercase">
-                                    Chương "{currentChapterDisplayName}" chưa có Thư mục nào
+                                    Chưa có Thư mục nào phù hợp
                                 </h3>
                                 <p className="text-xs text-slate-500 max-w-md mt-1 mb-5">
-                                    Tạo thư mục con như "Đề củng cố Bài học", "Đề ôn chương", "Đề tổng hợp" để gom nhóm và quản lý đề thi ngăn nắp hơn.
+                                    Tạo các thư mục như "Đề kiểm tra 15p", "Đề ôn tập giữa kỳ", "Đề ôn chương" để gom nhóm và quản lý đề thi ngăn nắp hơn.
                                 </p>
                                 <button className="px-7 py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs uppercase rounded-full shadow-lg shadow-amber-500/30 flex items-center gap-2 transition-all">
                                     <Plus size={16} strokeWidth={3} />
-                                    <span>TẠO THƯ MỤC ĐẦU TIÊN CHO CHƯƠNG NÀY</span>
+                                    <span>TẠO THƯ MỤC MỚI</span>
                                 </button>
                             </div>
                         )}
