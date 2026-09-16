@@ -222,7 +222,7 @@ export default function QuizList({
     const displayedFolders = useMemo(() => {
         return folders.filter(f => {
             const matchGrade = qGradeFilter === 'all' || !f.grade || f.grade === 'all' || f.grade === qGradeFilter;
-            const matchChapter = qChapterFilter === 'all' || f.chapterName === qChapterFilter;
+            const matchChapter = qChapterFilter === 'all' || !f.chapterName || (f.chapterName && f.chapterName.trim().toLowerCase() === qChapterFilter.trim().toLowerCase());
             return matchGrade && matchChapter;
         });
     }, [folders, qGradeFilter, qChapterFilter]);
@@ -230,11 +230,10 @@ export default function QuizList({
     // Lọc danh sách đề thi tổng thể
     const filtered = useMemo(() => {
         return uniqueQuizzes.filter(q => {
-            const matchGrade = qGradeFilter === 'all' || q.grade === qGradeFilter;
+            const matchGrade = qGradeFilter === 'all' || !q.grade || q.grade === 'all' || q.grade === qGradeFilter;
             const matchYear = !qAcademicYearFilter || qAcademicYearFilter === 'all' || 
               (qAcademicYearFilter === 'none' ? !q.academicYear : q.academicYear === qAcademicYearFilter);
-            const matchChapter = qChapterFilter === 'all' || q.category === qChapterFilter;
-            const matchSearch = q.title.toLowerCase().includes(qSearch.toLowerCase());
+            const matchSearch = !qSearch || q.title.toLowerCase().includes(qSearch.toLowerCase());
 
             // Lọc theo thư mục nếu đang mở 1 thư mục cụ thể
             let matchFolder = true;
@@ -243,9 +242,25 @@ export default function QuizList({
                     matchFolder = !q.folderId && !q.folderName;
                 } else {
                     const activeF = folders.find(f => f.id === activeFolderId);
-                    matchFolder = q.folderId === activeFolderId || (Boolean(activeF && activeF.name && q.folderName === activeF.name));
+                    if (activeF) {
+                        const matchFolderId = Boolean(q.folderId && q.folderId === activeF.id);
+                        const matchFolderName = Boolean(
+                            activeF.name && 
+                            q.folderName && 
+                            q.folderName.trim().toLowerCase() === activeF.name.trim().toLowerCase() &&
+                            (!activeF.chapterName || !q.category || q.category.trim().toLowerCase() === activeF.chapterName.trim().toLowerCase())
+                        );
+                        matchFolder = matchFolderId || matchFolderName;
+                    } else {
+                        matchFolder = q.folderId === activeFolderId;
+                    }
                 }
             }
+
+            // Khi đang mở 1 thư mục cụ thể (activeFolderId), không cần lọc lại matchChapter vì thư mục đã xác định ngữ cảnh
+            const matchChapter = (activeFolderId && activeFolderId !== 'unassigned')
+                ? true
+                : (qChapterFilter === 'all' || (q.category && q.category.trim().toLowerCase() === qChapterFilter.trim().toLowerCase()));
 
             const state = getQuizState(q);
             let matchStatus = true;
@@ -270,20 +285,29 @@ export default function QuizList({
     // Đếm số đề trong từng thư mục
     const getFolderQuizCount = (folder: QuizFolder) => {
         return uniqueQuizzes.filter(q => {
-            const matchGrade = qGradeFilter === 'all' || q.grade === qGradeFilter;
+            const matchGrade = qGradeFilter === 'all' || !q.grade || q.grade === 'all' || q.grade === qGradeFilter;
             const matchYear = !qAcademicYearFilter || qAcademicYearFilter === 'all' || (qAcademicYearFilter === 'none' ? !q.academicYear : q.academicYear === qAcademicYearFilter);
-            const matchChapter = q.category === folder.chapterName;
-            const matchFolder = q.folderId === folder.id || (Boolean(folder.name && q.folderName === folder.name));
-            return matchGrade && matchYear && matchChapter && matchFolder;
+            
+            // Khớp theo folderId trực tiếp
+            const matchFolderId = Boolean(q.folderId && q.folderId === folder.id);
+            // Hoặc khớp theo tên folder + tên chương (nếu đề chưa gán folderId cụ thể)
+            const matchFolderName = Boolean(
+                folder.name && 
+                q.folderName && 
+                q.folderName.trim().toLowerCase() === folder.name.trim().toLowerCase() && 
+                (!folder.chapterName || !q.category || q.category.trim().toLowerCase() === folder.chapterName.trim().toLowerCase())
+            );
+
+            return matchGrade && matchYear && (matchFolderId || matchFolderName);
         }).length;
     };
 
     // Số đề chưa phân thư mục trong chương hiện tại
     const unassignedQuizzesInChapter = useMemo(() => {
         return uniqueQuizzes.filter(q => {
-            const matchGrade = qGradeFilter === 'all' || q.grade === qGradeFilter;
+            const matchGrade = qGradeFilter === 'all' || !q.grade || q.grade === 'all' || q.grade === qGradeFilter;
             const matchYear = !qAcademicYearFilter || qAcademicYearFilter === 'all' || (qAcademicYearFilter === 'none' ? !q.academicYear : q.academicYear === qAcademicYearFilter);
-            const matchChapter = qChapterFilter === 'all' || q.category === qChapterFilter;
+            const matchChapter = qChapterFilter === 'all' || (q.category && q.category.trim().toLowerCase() === qChapterFilter.trim().toLowerCase());
             const isUnassigned = !q.folderId && !q.folderName;
             return matchGrade && matchYear && matchChapter && isUnassigned;
         });
