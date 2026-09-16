@@ -7,7 +7,7 @@ import {
   getQuizFolders, saveQuizFolder, deleteQuizFolder, batchMoveQuizzesToFolder,
   getBankQuestions, saveBankQuestion,
   getClasses, saveClass, deleteClass, saveClassesBatch, assignStudentsToClass,
-  clearLocalCache,
+  clearLocalCache, clearAllLocalCaches,
   isDatabaseConnected,
   syncAllQuizzesMetadata,
   syncQuizzesToBank,
@@ -1303,13 +1303,17 @@ export default function AdminDashboard() {
         
         <div className="p-2 lg:p-3 border-t border-white/10 mt-auto">
           <button
-            onClick={() => loadTabData(activeTab, true)}
+            onClick={async () => {
+              clearAllLocalCaches();
+              await loadTabData(activeTab, true);
+              showAlert("Đã đồng bộ", "Đã dọn dẹp toàn bộ bộ nhớ đệm và tải dữ liệu mới nhất 100% từ Máy chủ!", "success");
+            }}
             disabled={isDataLoading}
-            title="Tải lại toàn bộ dữ liệu mới nhất từ Cloud"
+            title="Xóa cache và tải lại toàn bộ dữ liệu mới nhất từ Cloud"
             className="w-full flex items-center justify-center lg:justify-start gap-3 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase text-slate-400 hover:text-white hover:bg-white/5 transition-all"
           >
             <RefreshCw size={18} className={isDataLoading ? "animate-spin text-blue-400" : ""} />
-            <span className="hidden lg:inline">Làm mới Cloud</span>
+            <span className="hidden lg:inline">Xóa Cache & Đồng bộ</span>
           </button>
         </div>
       </aside>
