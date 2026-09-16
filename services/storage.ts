@@ -5,13 +5,13 @@ import { createClient } from '@supabase/supabase-js';
 import { User, Quiz, Result, Chapter, QuizFolder, Question, ExamSession, PublishedResult, Grade, ClassRoom } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
-let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://buelyuxsztnhrwinrldp.supabase.co').trim();
+let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://lchfhsioxvgkjfsikycl.supabase.co').trim();
 if (cleanedUrl.endsWith('/rest/v1') || cleanedUrl.endsWith('/rest/v1/')) {
     cleanedUrl = cleanedUrl.replace(/\/rest\/v1\/?$/, '');
 }
 const SUPABASE_URL = cleanedUrl;
 
-const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ1ZWx5dXhzenRuaHJ3aW5ybGRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzOTEwMzAsImV4cCI6MjEwNDk2NzAzMH0.J01Qu55HgJDsiChcAY0ZlZkdjSjUXlAN1H82fnyE8Eg').trim();
+const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjaGZoc2lveHZna2pmc2lreWNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NTI3MDksImV4cCI6MjA4MDUyODcwOX0.toOc2ytPzo_cqhpQyd0YOLq4Zvk3BtfdZSziXN__j8Q').trim();
 
 let supabase: any = null;
 
@@ -548,6 +548,35 @@ export const updateQuizInCache = (updatedQuiz: Quiz) => {
   });
 };
 
+// Xóa sạch tất cả bộ nhớ đệm (Memory, localStorage, sessionStorage) để tải dữ liệu mới nhất 100% từ Server
+export const clearAllLocalCaches = () => {
+  for (const k of Object.keys(memoryCache)) {
+    delete memoryCache[k];
+  }
+  quizDetailCache.clear();
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith('quizzes_') || k.startsWith('chapters_') || k.startsWith('quiz_folders_') || k.startsWith('eduquiz_admin_quiz_filters') || k.startsWith('results_') || k.startsWith('classes_') || k.startsWith('users_'))) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach(k => localStorage.removeItem(k));
+    }
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.clear();
+    }
+  } catch (e) {}
+};
+
+// Tự động xóa sạch các cache cũ trong localStorage khi tải file
+try {
+  clearAllLocalCaches();
+} catch (e) {}
+
 // Xóa 1 đề thi khỏi Cache Memory trực tiếp
 export const removeQuizFromCache = (quizId: string) => {
   quizDetailCache.delete(quizId);
@@ -573,20 +602,6 @@ export const getQuizzesMetadata = async (grade?: Grade, forceRefresh: boolean = 
   if (!forceRefresh && memoryCache[cacheKey] && memoryCache[cacheKey].expires > now) {
     return memoryCache[cacheKey].data;
   }
-
-  // Kiểm tra localStorage / sessionStorage để khi load/F5 có dữ liệu hiển thị tức thì
-  try {
-    if (!forceRefresh && typeof localStorage !== 'undefined') {
-      const stored = localStorage.getItem(cacheKey) || (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(cacheKey) : null);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed && Array.isArray(parsed.data) && parsed.data.length > 0) {
-          memoryCache[cacheKey] = parsed;
-          return parsed.data;
-        }
-      }
-    }
-  } catch (e) {}
 
   const fetchPromise = async (): Promise<Quiz[]> => {
     let allQuizzes: any[] = [];
@@ -631,31 +646,11 @@ export const getQuizzesMetadata = async (grade?: Grade, forceRefresh: boolean = 
 
     const cachePayload = { data: mapped, expires: Date.now() + CACHE_TTL };
     memoryCache[cacheKey] = cachePayload;
-    try {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(cacheKey, JSON.stringify(cachePayload));
-      }
-      if (typeof sessionStorage !== 'undefined') {
-        sessionStorage.setItem(cacheKey, JSON.stringify(cachePayload));
-      }
-    } catch (e) {}
-
     return mapped;
   };
 
-  // Lấy dữ liệu từ cache local sẵn có làm fallback nếu mạng quá chậm
-  let fallbackData: Quiz[] = [];
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const saved = localStorage.getItem(cacheKey);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed?.data)) fallbackData = parsed.data;
-      }
-    }
-  } catch {}
-
-  return withTimeout(fetchPromise(), 6000, fallbackData);
+  const cached = memoryCache[cacheKey]?.data || [];
+  return withTimeout(fetchPromise(), 6000, cached);
 };
 
 export const getQuizzes = async (grade?: Grade, forceRefresh: boolean = false): Promise<Quiz[]> => {
