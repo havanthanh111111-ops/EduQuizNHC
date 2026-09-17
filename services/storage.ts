@@ -5,13 +5,13 @@ import { createClient } from '@supabase/supabase-js';
 import { User, Quiz, Result, Chapter, QuizFolder, Question, ExamSession, PublishedResult, Grade, ClassRoom } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
-let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://buelyuxsztnhrwinrldp.supabase.co').trim();
+let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://lchfhsioxvgkjfsikycl.supabase.co').trim();
 if (cleanedUrl.endsWith('/rest/v1') || cleanedUrl.endsWith('/rest/v1/')) {
     cleanedUrl = cleanedUrl.replace(/\/rest\/v1\/?$/, '');
 }
 const SUPABASE_URL = cleanedUrl;
 
-const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ1ZWx5dXhzenRuaHJ3aW5ybGRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzOTEwMzAsImV4cCI6MjEwNDk2NzAzMH0.J01Qu55HgJDsiChcAY0ZlZkdjSjUXlAN1H82fnyE8Eg').trim();
+const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjaGZoc2lveHZna2pmc2lreWNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NTI3MDksImV4cCI6MjA4MDUyODcwOX0.toOc2ytPzo_cqhpQyd0YOLq4Zvk3BtfdZSziXN__j8Q').trim();
 
 let supabase: any = null;
 
@@ -572,10 +572,10 @@ export const clearAllLocalCaches = () => {
   } catch (e) {}
 };
 
-// Tự động xóa sạch các cache cũ trong localStorage khi tải file
-try {
-  clearAllLocalCaches();
-} catch (e) {}
+// Chỉ xóa cache khi người dùng bấm nút "Xóa Cache & Đồng bộ"
+// try {
+//   clearAllLocalCaches();
+// } catch (e) {}
 
 // Xóa 1 đề thi khỏi Cache Memory trực tiếp
 export const removeQuizFromCache = (quizId: string) => {
@@ -614,6 +614,10 @@ export const getQuizzesMetadata = async (grade?: Grade, forceRefresh: boolean = 
             .select('*')
             .range(from, from + step - 1);
             
+        if (grade && grade !== 'all') {
+            query = query.or(`grade.eq.${grade},grade.eq.all,grade.is.null`);
+        }
+
         try {
           query = query.order('id', { ascending: false });
         } catch {}
@@ -754,11 +758,12 @@ export const updateQuiz = async (enrichedQuiz: Quiz): Promise<void> => {
 };
 
 // Helper tính toán Niên khóa / Năm học hiện hành theo lịch Việt Nam (tháng 9 bắt đầu năm học mới)
-// Ví dụ: Từ 01/09/2026 đến 31/08/2027 => Niên khóa 2026-2027
-// Trước 01/09/2026 (ví dụ tháng 5/2026) => Niên khóa 2025-2026
+// Quy tắc: Từ 01/09 đến 31/08 năm sau:
+// - Từ 01/09/2025 đến 31/08/2026 => Niên học 2025-2026
+// - Qua ngày 01/09/2026 đến 31/08/2027 => Niên học 2026-2027
 export const getCurrentAcademicYear = (date: Date = new Date()): string => {
   const currentYear = date.getFullYear();
-  const currentMonth = date.getMonth() + 1; // 1-12
+  const currentMonth = date.getMonth() + 1; // 1 (Tháng 1) đến 12 (Tháng 12)
   if (currentMonth >= 9) {
     return `${currentYear}-${currentYear + 1}`;
   } else {
@@ -1452,20 +1457,21 @@ export const syncQuizzesToBank = async (forceAll: boolean = false): Promise<{
             }
         }
 
-        // 4. Gắn cờ isSyncedToBank: true cho các đề thi vừa được quét xong
+        // 4. Gắn cờ isSyncedToBank: true cho các đề thi vừa được quét xong (thực thi song song nhanh chóng)
         const nowIso = new Date().toISOString();
-        for (const row of pendingQuizRows) {
+        const updatePromises = pendingQuizRows.map((row: any) => {
             const quiz = row.data as Quiz;
             const updatedQuiz: Quiz = {
                 ...quiz,
                 isSyncedToBank: true,
                 syncedToBankAt: nowIso
             };
-            await supabase.from('quizzes').update({
+            return supabase!.from('quizzes').update({
                 data: updatedQuiz,
                 grade: row.grade || quiz.grade
             }).eq('id', row.id);
-        }
+        });
+        await Promise.all(updatePromises);
 
         return { 
             total: totalScanned, 
