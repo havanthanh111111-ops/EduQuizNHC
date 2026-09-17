@@ -47,17 +47,18 @@ import QuizPreviewModal from './QuizPreviewModal';
 
 type AdminTab = 'quizzes' | 'classes' | 'students' | 'results' | 'monitor' | 'chapters' | 'bank' | 'ai';
 
-const SESSION_KEY_QUIZ_FILTERS = 'eduquiz_admin_quiz_filters_v5';
+const SESSION_KEY_QUIZ_FILTERS = 'eduquiz_admin_quiz_filters_v6';
 
 const getInitialQuizFilters = () => {
+  const currentYear = getCurrentAcademicYear();
   try {
     const raw = (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(SESSION_KEY_QUIZ_FILTERS) : null) || 
                 (typeof localStorage !== 'undefined' ? localStorage.getItem(SESSION_KEY_QUIZ_FILTERS) : null);
     if (raw) {
       const parsed = JSON.parse(raw);
       return {
-        academicYear: parsed.academicYear || 'all',
-        grade: (parsed.grade as Grade | 'all') || 'all',
+        academicYear: parsed.academicYear || currentYear,
+        grade: (parsed.grade as Grade | 'all') || '10',
         chapter: parsed.chapter || 'all',
         search: parsed.search || '',
         status: (parsed.status as QuizStatusFilter) || 'all',
@@ -67,8 +68,8 @@ const getInitialQuizFilters = () => {
     }
   } catch (e) {}
   return {
-    academicYear: 'all',
-    grade: 'all' as Grade | 'all',
+    academicYear: currentYear,
+    grade: '10' as Grade | 'all',
     chapter: 'all',
     search: '',
     status: 'all' as QuizStatusFilter,
@@ -147,8 +148,9 @@ export default function AdminDashboard() {
     setIsDataLoading(true);
     try {
       if (tab === 'quizzes') {
+        const initialGrade = qGradeFilterRef.current !== 'all' ? qGradeFilterRef.current : undefined;
         const [q, c, cls, fld] = await Promise.all([
-          getQuizzesMetadata('all', forceRefresh), 
+          getQuizzesMetadata(initialGrade, forceRefresh), 
           getChapters(forceRefresh),
           getClasses(forceRefresh),
           getQuizFolders('all', forceRefresh)
@@ -157,12 +159,23 @@ export default function AdminDashboard() {
           setQuizzes(q);
         } else {
           // Fallback nếu metadata rỗng thì thử lấy full quizzes
-          const full = await getQuizzes('all', forceRefresh);
+          const full = await getQuizzes(initialGrade, forceRefresh);
           if (full && full.length > 0) setQuizzes(full);
         }
         setChapters(c || []);
         setClasses(cls || []);
         setFolders(fld || []);
+
+        // Tự động gán chương thuộc khối mặc định nếu chưa chọn chương cụ thể
+        if (c && c.length > 0 && qGradeFilterRef.current !== 'all') {
+          const matchedChapter = c.find((ch: Chapter) => String(ch.grade) === String(qGradeFilterRef.current));
+          if (matchedChapter?.name) {
+            setQChapterFilter((prev: string) => {
+              const prevBelongs = c.some((ch: Chapter) => String(ch.grade) === String(qGradeFilterRef.current) && ch.name === prev);
+              return prevBelongs ? prev : matchedChapter.name;
+            });
+          }
+        }
         // Tải kết quả bài thi trong background không làm treo giao diện
         getResultsMetadata('all', 2000, forceRefresh).then(r => {
           setResults(r || []);
@@ -208,8 +221,9 @@ export default function AdminDashboard() {
         setStudents(u.filter(user => user.role === 'student'));
         setClasses(cls);
       } else if (tab === 'bank') {
+        const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : '10';
         const [b, c] = await Promise.all([
-          getBankQuestions(forceRefresh),
+          getBankQuestions(targetGrade, forceRefresh),
           getChapters(forceRefresh)
         ]);
         setBankQuestions(b);
@@ -228,6 +242,23 @@ export default function AdminDashboard() {
   useEffect(() => {
     loadTabData(activeTab);
   }, [activeTab]);
+
+  // Khi chuyển Khối trong Quản lý đề thi, tự động tải dữ liệu khối đó (có cache) giúp tiết kiệm băng thông tối đa
+  useEffect(() => {
+    if (activeTab === 'quizzes') {
+      const targetGrade = qGradeFilter !== 'all' ? qGradeFilter : undefined;
+      getQuizzesMetadata(targetGrade).then(loaded => {
+        if (loaded && loaded.length > 0) {
+          setQuizzes(prev => {
+            const map = new Map<string, Quiz>();
+            prev.forEach(item => map.set(item.id, item));
+            loaded.forEach(item => map.set(item.id, item));
+            return Array.from(map.values());
+          });
+        }
+      }).catch(err => console.warn("Lỗi tải đề theo khối:", err));
+    }
+  }, [qGradeFilter, activeTab]);
 
   const mainScrollRef = useRef<HTMLElement | null>(null);
 
@@ -375,7 +406,7 @@ export default function AdminDashboard() {
     return () => clearTimeout(timer);
   }, [sSearch, activeTab]);
 
-  const [bGradeFilter, setBGradeFilter] = useState<Grade | 'all'>('all');
+  const [bGradeFilter, setBGradeFilter] = useState<Grade | 'all'>('10');
   const [bChapterFilter, setBChapterFilter] = useState('all');
   const [bTypeFilter, setBTypeFilter] = useState<QuestionType | 'all'>('all');
   const [bSearch, setBSearch] = useState('');
@@ -452,28 +483,44 @@ export default function AdminDashboard() {
   const [isBankOpen, setIsBankOpen] = useState(false);
   const [isBankLoading, setIsBankLoading] = useState(false);
 
-  const loadBankDataIfNeeded = useCallback(async () => {
+  const loadBankDataIfNeeded = useCallback(async (grade?: Grade | 'all', forceRefresh: boolean = false) => {
     if (!isDatabaseConnected()) return;
-    if (bankQuestions.length === 0) {
-      setIsBankLoading(true);
-      try {
-        const [b, c] = await Promise.all([
-          getBankQuestions(),
-          getChapters()
-        ]);
-        setBankQuestions(b);
-        if (c && c.length > 0) setChapters(c);
-      } catch (e) {
-        console.error("Lỗi tải ngân hàng câu hỏi:", e);
-      } finally {
-        setIsBankLoading(false);
-      }
+    const targetGrade = grade || (bGradeFilter !== 'all' ? bGradeFilter : '10');
+    setIsBankLoading(true);
+    try {
+      const [b, c] = await Promise.all([
+        getBankQuestions(targetGrade, forceRefresh),
+        getChapters(forceRefresh)
+      ]);
+      setBankQuestions(b);
+      if (c && c.length > 0) setChapters(c);
+    } catch (e) {
+      console.error("Lỗi tải ngân hàng câu hỏi:", e);
+    } finally {
+      setIsBankLoading(false);
     }
-  }, [bankQuestions.length]);
+  }, [bGradeFilter]);
 
   const allAvailableQuestions = useMemo(() => {
     return bankQuestions;
   }, [bankQuestions]);
+
+  // Khi chuyển Khối trong Ngân hàng câu hỏi (hoặc mở modal từ màn hình soạn đề), tự động tải câu hỏi khối tương ứng (có cache)
+  useEffect(() => {
+    if (activeTab === 'bank' || isBankOpen) {
+      const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : undefined;
+      getBankQuestions(targetGrade).then(loaded => {
+        if (loaded && loaded.length > 0) {
+          setBankQuestions(prev => {
+            const map = new Map<string, Question>();
+            prev.forEach((item, idx) => map.set(item.id || `q_b_${idx}`, item));
+            loaded.forEach((item, idx) => map.set(item.id || `q_l_${idx}`, item));
+            return Array.from(map.values());
+          });
+        }
+      }).catch(err => console.warn("Lỗi tải ngân hàng câu hỏi theo khối:", err));
+    }
+  }, [bGradeFilter, activeTab, isBankOpen]);
 
   // Quiz Handlers
   const handleCreateQuiz = () => {
@@ -1293,7 +1340,13 @@ export default function AdminDashboard() {
           ].map(tab => (
             <button
               key={tab.id}
-              onClick={() => { setActiveTab(tab.id as AdminTab); setIsEditingQuiz(false); }}
+              onClick={() => { 
+                if (tab.id === 'bank') {
+                  setBGradeFilter('10');
+                }
+                setActiveTab(tab.id as AdminTab); 
+                setIsEditingQuiz(false); 
+              }}
               className={`w-full flex items-center justify-center lg:justify-start gap-3 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-white/5'}`}
             >
               <tab.icon size={18}/> <span className="hidden lg:inline">{tab.label}</span>
@@ -1376,7 +1429,7 @@ export default function AdminDashboard() {
                     onOpenBank={(type) => { 
                         setBTypeFilter(type); 
                         setBGradeFilter(quizGrade); 
-                        loadBankDataIfNeeded();
+                        loadBankDataIfNeeded(quizGrade);
                         setIsBankOpen(true); 
                     }}
                     onPdfExtract={handlePdfExtract} onTextExtract={handleTextExtract} onUploadImage={handleUploadImage} uploadingId={uploadingId} isAiLoading={isAiLoading}
