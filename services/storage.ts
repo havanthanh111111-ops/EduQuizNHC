@@ -411,7 +411,7 @@ export const changePassword = async (userId: string, newPassword: string): Promi
 };
 
 // Định nghĩa các trường Metadata của Đề thi (chỉ lấy thông tin hiển thị, KHÔNG LẤY cột câu hỏi để giảm 98% băng thông)
-const QUIZ_METADATA_PROJECTION = 'id,grade,data->title,data->description,data->type,data->academicYear,data->category,data->folderId,data->folderName,data->startTime,data->endTime,data->durationMinutes,data->questionCount,data->attemptCount,data->createdAt,data->isPublished,data->isMonitored,data->isUnlisted,data->targetType,data->assignedClassIds,data->assignedClasses,data->maxAttempts,data->allowReview,data->orderIndex';
+const QUIZ_METADATA_PROJECTION = 'id,grade,data->title,data->description,data->type,data->academicYear,data->category,data->folderId,data->folderName,data->startTime,data->endTime,data->durationMinutes,data->questionCount,data->attemptCount,data->createdAt,data->isPublished,data->isMonitored,data->isUnlisted,data->targetType,data->assignedClassIds,data->assignedClasses,data->maxAttempts,data->allowReview,data->orderIndex,data->isSyncedToBank,data->syncedToBankAt';
 
 const mapRowToQuizMeta = (row: any): Quiz => {
     const d = (row && row.data && typeof row.data === 'object') ? row.data : (row || {});
@@ -440,6 +440,8 @@ const mapRowToQuizMeta = (row: any): Quiz => {
         maxAttempts: typeof row.maxAttempts === 'number' ? row.maxAttempts : (typeof d.maxAttempts === 'number' ? d.maxAttempts : 2),
         allowReview: row.allowReview ?? d.allowReview ?? true,
         orderIndex: typeof row.orderIndex === 'number' ? row.orderIndex : (typeof d.orderIndex === 'number' ? d.orderIndex : 0),
+        isSyncedToBank: row.isSyncedToBank === true || row.isSyncedToBank === 'true' || d.isSyncedToBank === true || d.isSyncedToBank === 'true',
+        syncedToBankAt: row.syncedToBankAt || d.syncedToBankAt || undefined,
         questions: [] // Tuyệt đối không tải mảng câu hỏi ở metadata để tiết kiệm bộ nhớ và băng thông
     };
 };
@@ -730,7 +732,13 @@ export const saveQuiz = async (quiz: Quiz): Promise<void> => {
 
 export const updateQuiz = async (enrichedQuiz: Quiz): Promise<void> => {
   if (!supabase) throw new Error("Mất kết nối Database");
-  const quiz = { ...enrichedQuiz, questionCount: enrichedQuiz.questions.length };
+  // Khi chỉnh sửa đề thi (thêm/sửa câu hỏi, đổi nội dung...), đặt lại cờ isSyncedToBank: false
+  // để tính năng quét đồng bộ nhận diện được đây là đề có thay đổi cần quét cập nhật vào Ngân hàng
+  const quiz = { 
+    ...enrichedQuiz, 
+    questionCount: enrichedQuiz.questions.length,
+    isSyncedToBank: false 
+  };
   updateQuizInCache(quiz);
   const { error } = await supabase.from('quizzes').update({ data: quiz, grade: enrichedQuiz.grade }).eq('id', enrichedQuiz.id);
   handleSupabaseError(error, "Cập nhật đề thi");

@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 import LatexText from '../LatexText';
 import { parseQuestionsFromJSON, autoCategorizeChaptersWithAI, autoClassifyLevelsWithAI, generateSolutionForQuestionWithAI, batchGenerateSolutionsWithAI } from '../../services/gemini';
 import QuizImageGalleryModal from './QuizImageGalleryModal';
+import PdfImageExtractorModal from './PdfImageExtractorModal';
 import LatexHelperModal from './LatexHelperModal';
 import ImageStorageSettingsModal from './ImageStorageSettingsModal';
 import { extractTextFromDocx } from '../../services/docxExtractor';
@@ -92,6 +93,7 @@ interface QuestionSectionProps {
     uploadingId: string | null;
     onOpenBank: (type: QuestionType) => void;
     onOpenGalleryForQuestion?: (qId: string) => void;
+    onOpenPdfExtractorForQuestion?: (qId: string) => void;
     onOpenBatchForImage?: (imageUrl: string) => void;
     uniqueImagesCount?: number;
     onOpenLatexHelper?: (qId: string, qLabel?: string) => void;
@@ -113,6 +115,7 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
     uploadingId, 
     onOpenBank,
     onOpenGalleryForQuestion,
+    onOpenPdfExtractorForQuestion,
     onOpenBatchForImage,
     uniqueImagesCount = 0,
     onOpenLatexHelper,
@@ -523,6 +526,17 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
                                     {uniqueImagesCount > 0 ? `CHỌN TỪ ĐỀ (${uniqueImagesCount}) / DÁN LINK` : 'DÁN LINK ẢNH'}
                                 </button>
 
+                                {/* Nút mở kho quét ảnh tự động từ file PDF */}
+                                <button
+                                    type="button"
+                                    onClick={() => onOpenPdfExtractorForQuestion && onOpenPdfExtractorForQuestion(q.id)}
+                                    className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1.5 shadow-sm active:scale-95"
+                                    title="Quét toàn bộ ảnh từ file PDF và gán nhanh vào câu này"
+                                >
+                                    <Sparkles size={14} className="text-indigo-600" />
+                                    QUÉT ẢNH TỪ PDF
+                                </button>
+
                                 {/* Nếu câu đã có ảnh: Nút copy link ảnh */}
                                 {q.imageUrl && (
                                     <button 
@@ -693,6 +707,9 @@ export default function QuizEditor(props: QuizEditorProps) {
     const [pastedText, setPastedText] = useState('');
     const [isGalleryOpen, setIsGalleryOpen] = useState(false);
     const [galleryTargetQId, setGalleryTargetQId] = useState<string | null>(null);
+    const [isPdfExtractorOpen, setIsPdfExtractorOpen] = useState(false);
+    const [pdfExtractorTargetQId, setPdfExtractorTargetQId] = useState<string | null>(null);
+    const [currentPdfFile, setCurrentPdfFile] = useState<File | null>(null);
     const [isLatexHelperOpen, setIsLatexHelperOpen] = useState(false);
     const [latexTargetQId, setLatexTargetQId] = useState<string | null>(null);
     const [latexTargetLabel, setLatexTargetLabel] = useState<string | null>(null);
@@ -975,6 +992,28 @@ export default function QuizEditor(props: QuizEditorProps) {
             nl[i].imageUrl = imageUrl;
             props.setQuestions(nl);
         }
+    };
+
+    const handleAssignImageFromPdf = (
+        qId: string, 
+        imageUrl: string, 
+        slot: 'question' | 'solution' | 'optA' | 'optB' | 'optC' | 'optD' = 'question'
+    ) => {
+        const nl = [...props.questions];
+        const i = nl.findIndex(x => x.id === qId);
+        if (i !== -1) {
+            if (slot === 'question') {
+                nl[i].imageUrl = imageUrl;
+            } else if (slot === 'solution') {
+                nl[i].solution = (nl[i].solution ? nl[i].solution + '\n' : '') + `![Lời giải](${imageUrl})`;
+            }
+            props.setQuestions(nl);
+        }
+    };
+
+    const handleOpenPdfExtractorForQuestion = (qId?: string) => {
+        setPdfExtractorTargetQId(qId || null);
+        setIsPdfExtractorOpen(true);
     };
 
     const handleBatchApplyImage = (sourceImageUrl: string, targetQuestionIds: string[]) => {
@@ -1277,6 +1316,15 @@ export default function QuizEditor(props: QuizEditorProps) {
                         >
                             <Zap size={13}/> Dọn nhãn
                         </button>
+                        <button
+                            type="button"
+                            onClick={() => handleOpenPdfExtractorForQuestion()}
+                            className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-[10px] font-black uppercase transition-all shadow-md active:scale-95 whitespace-nowrap"
+                            title="Tự động quét toàn bộ ảnh từ file PDF và gán trực tiếp vào từng câu hỏi"
+                        >
+                            <Sparkles size={13} className="text-amber-300" />
+                            <span>Quét & Gán ảnh PDF</span>
+                        </button>
                         <button 
                             onClick={() => setIsTextInputOpen(true)}
                             className={`flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-black transition-all shadow-xs active:scale-95 whitespace-nowrap ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -1289,7 +1337,17 @@ export default function QuizEditor(props: QuizEditorProps) {
                         </label>
                         <label className={`flex items-center gap-1.5 px-3 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase cursor-pointer hover:bg-black transition-all shadow-xs active:scale-95 whitespace-nowrap ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
                             <FileUp size={13}/> Nhập PDF (AI)
-                            <input type="file" accept="application/pdf" className="hidden" disabled={props.isAiLoading} onChange={props.onPdfExtract}/>
+                            <input 
+                                type="file" 
+                                accept="application/pdf" 
+                                className="hidden" 
+                                disabled={props.isAiLoading} 
+                                onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) setCurrentPdfFile(file);
+                                    props.onPdfExtract(e);
+                                }}
+                            />
                         </label>
                     </div>
                 </div>
@@ -2143,6 +2201,7 @@ export default function QuizEditor(props: QuizEditorProps) {
                 uploadingId={props.uploadingId} 
                 onOpenBank={props.onOpenBank}
                 onOpenGalleryForQuestion={handleOpenGalleryForQuestion}
+                onOpenPdfExtractorForQuestion={handleOpenPdfExtractorForQuestion}
                 onOpenBatchForImage={handleOpenBatchForImage}
                 uniqueImagesCount={uniqueImagesCount}
                 onOpenLatexHelper={handleOpenLatexHelper}
@@ -2163,6 +2222,7 @@ export default function QuizEditor(props: QuizEditorProps) {
                 uploadingId={props.uploadingId} 
                 onOpenBank={props.onOpenBank}
                 onOpenGalleryForQuestion={handleOpenGalleryForQuestion}
+                onOpenPdfExtractorForQuestion={handleOpenPdfExtractorForQuestion}
                 onOpenBatchForImage={handleOpenBatchForImage}
                 uniqueImagesCount={uniqueImagesCount}
                 onOpenLatexHelper={handleOpenLatexHelper}
@@ -2183,6 +2243,7 @@ export default function QuizEditor(props: QuizEditorProps) {
                 uploadingId={props.uploadingId} 
                 onOpenBank={props.onOpenBank}
                 onOpenGalleryForQuestion={handleOpenGalleryForQuestion}
+                onOpenPdfExtractorForQuestion={handleOpenPdfExtractorForQuestion}
                 onOpenBatchForImage={handleOpenBatchForImage}
                 uniqueImagesCount={uniqueImagesCount}
                 onOpenLatexHelper={handleOpenLatexHelper}
@@ -2206,6 +2267,19 @@ export default function QuizEditor(props: QuizEditorProps) {
                 targetQuestionId={galleryTargetQId}
                 onSelectImageForQuestion={handleSelectImageForQuestion}
                 onBatchApplyImage={handleBatchApplyImage}
+            />
+
+            {/* Modal Tự động quét & gán ảnh từ file PDF */}
+            <PdfImageExtractorModal
+                isOpen={isPdfExtractorOpen}
+                onClose={() => {
+                    setIsPdfExtractorOpen(false);
+                    setPdfExtractorTargetQId(null);
+                }}
+                questions={props.questions}
+                targetQuestionId={pdfExtractorTargetQId}
+                onAssignImageToQuestion={handleAssignImageFromPdf}
+                currentPdfFile={currentPdfFile}
             />
 
             {/* Modal Hỗ trợ công thức Toán & Ký hiệu LaTeX */}
