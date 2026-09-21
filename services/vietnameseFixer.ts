@@ -170,18 +170,132 @@ export function repairVietnameseTextOnly(raw: string): string {
 }
 
 /**
+ * Tự động bọc $...$ cho các công thức, biểu thức, ký hiệu toán/lý bị thiếu dấu $
+ * và chuẩn hóa \(...\), \[...\] sang $...$, $$...$$
+ */
+export function autoWrapLatex(text: string): string {
+    if (!text) return '';
+    
+    // 1. Chuyển đổi \( ... \) và \[ ... \] thành $ ... $ và $$ ... $$
+    let res = text
+        .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$')
+        .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$');
+
+    // 2. Chuẩn hóa dấu phẩy số thập phân trong khối LaTeX $12,5$ -> $12{,}5$
+    res = res.replace(/\$([^$]+)\$/g, (_m, inner) => {
+        const fixedInner = inner.replace(/(\d+),(\d+)/g, '$1{,}$2');
+        return `$${fixedInner}$`;
+    });
+
+    // 3. Tự động bọc $...$ cho các lệnh LaTeX chưa có bao bọc $
+    const parts = res.split(/(\${1,2}[^$]+\${1,2})/g);
+    const processed = parts.map(part => {
+        if (part.startsWith('$')) {
+            return part; // Đã là khối LaTeX
+        }
+        
+        let chunk = part;
+        
+        // Nhận diện các lệnh LaTeX phổ biến (bắt đầu bằng \)
+        const latexPattern = /(?<!\\)(\\(?:frac\{[^{}]*\}\{[^{}]*\}|sqrt(?:\[[^{}]*\])?\{[^{}]*\}|vec\{[^{}]*\}|text\{[^{}]*\}|mathrm\{[^{}]*\}|mathbf\{[^{}]*\}|hat\{[^{}]*\}|bar\{[^{}]*\}|dot\{[^{}]*\}|ddot\{[^{}]*\}|left[([{|.]|right[)\]}|.]|alpha|beta|gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|Lambda|mu|nu|xi|Xi|pi|Pi|rho|sigma|Sigma|tau|upsilon|phi|Phi|chi|psi|Psi|omega|Omega|infty|approx|le|ge|neq|equiv|sim|times|div|cdot|pm|mp|circ|degree|rightarrow|to|parallel|perp|angle|sum|int|lim)(?:[a-zA-Z0-9_{}^=+\-*/(),.\s]*))/g;
+
+        chunk = chunk.replace(latexPattern, (m) => {
+            const trimmed = m.trim();
+            if (!trimmed) return m;
+            return `$${trimmed}$`;
+        });
+
+        // Nhận diện số mũ hoặc chỉ số dưới chưa bọc LaTeX (ví dụ 10^-3, 10^5, x_1, v_{max})
+        const expPattern = /(?<=\s|^|[([=+\-*/])([a-zA-Z0-9]+\^\{?-?[0-9a-zA-Z+\-]+\}?|[a-zA-Z]+_\{?[0-9a-zA-Z+\-]+\}?)(?=\s|$|[)\].,;:!?])/g;
+        chunk = chunk.replace(expPattern, (m) => {
+            const trimmed = m.trim();
+            if (!trimmed || trimmed.startsWith('$')) return m;
+            return `$${trimmed}$`;
+        });
+
+        return chunk;
+    });
+
+    return processed.join('');
+}
+
+/**
+ * Xóa các tiền tố gán cứng số câu trong đề gốc khỏi nội dung lời dẫn dùng chung
+ * (Ví dụ: "Dữ liệu dùng chung cho câu 3, 4: Cho đoạn mạch..." -> "Cho đoạn mạch...")
+ */
+export function cleanSharedContextBody(raw?: string): string {
+    if (!raw) return '';
+    let text = raw.trim();
+    const prefixRegexes = [
+        /^(?:Dữ\s*liệu|Thông\s*tin|Đoạn\s*văn|Đoạn\s*trích|Bảng\s*số\s*liệu|Lời\s*dẫn|Bối\s*cảnh|Tình\s*huống)?\s*(?:dùng\s*chung)?\s*(?:cho|của)?\s*(?:các)?\s*(?:câu|câu\s*hỏi|ý)\s*(?:\d+|[A-Z])(?:\s*(?:,|;|và|-|–|đến|to)\s*(?:câu\s*)?(?:\d+|[A-Z]))*\s*[:.\-–—]\s*/i,
+        /^(?:Sử\s*dụng|Dựa\s*vào|Căn\s*cứ\s*vào|Đọc|Quan\s*sát|Xem)\s*(?:dữ\s*liệu|thông\s*tin|bảng|đồ\s*thị|hình\s*vẽ|đoạn\s*văn|bài\s*đọc|thực\s*nghiệm)?\s*(?:sau\s*)?(?:đây\s*)?(?:để\s*)?trả\s*lời\s*(?:cho\s*)?(?:các\s*)?(?:câu|câu\s*hỏi|ý)?\s*(?:\d+|[A-Z])(?:\s*(?:,|;|và|-|–|đến|to)\s*(?:câu\s*)?(?:\d+|[A-Z]))*\s*[:.\-–—]\s*/i,
+        /^(?:Dữ\s*liệu|Lời\s*dẫn|Thông\s*tin)\s*dùng\s*chung\s*[:.\-–—]\s*/i
+    ];
+
+    for (const regex of prefixRegexes) {
+        text = text.replace(regex, '');
+    }
+    return text.trim();
+}
+
+/**
+ * Tính toán thông tin nhóm câu hỏi có chung lời dẫn trong danh sách đề thi hiện hành
+ * Tự động sinh tiêu đề linh hoạt: "Dữ liệu dùng chung cho Câu 5 – Câu 6"
+ */
+export function getContextGroupInfo(questions: { context?: string }[], currentIndex: number): {
+    label: string;
+    isFirstInGroup: boolean;
+    groupCount: number;
+    cleanedContext: string;
+} {
+    const currentQ = questions[currentIndex];
+    const currentCtx = (currentQ?.context || '').trim();
+    if (!currentCtx) {
+        return { label: '', isFirstInGroup: true, groupCount: 0, cleanedContext: '' };
+    }
+
+    const cleanedContext = cleanSharedContextBody(currentCtx);
+
+    // Tìm phạm vi các câu hỏi liên tiếp có chung context
+    let start = currentIndex;
+    while (start > 0 && (questions[start - 1]?.context || '').trim() === currentCtx) {
+        start--;
+    }
+
+    let end = currentIndex;
+    while (end < questions.length - 1 && (questions[end + 1]?.context || '').trim() === currentCtx) {
+        end++;
+    }
+
+    const isFirstInGroup = currentIndex === start;
+    const groupCount = end - start + 1;
+
+    let label = '';
+    if (groupCount > 1) {
+        label = `Dữ liệu dùng chung cho Câu ${start + 1} – Câu ${end + 1}`;
+    } else {
+        label = `Dữ liệu dùng chung cho Câu ${currentIndex + 1}`;
+    }
+
+    return { label, isFirstInGroup, groupCount, cleanedContext };
+}
+
+/**
  * Chuẩn hóa toàn bộ chuỗi nhưng bảo vệ an toàn 100% cho các khối LaTeX $...$
  */
 export function normalizeFullText(text: string): string {
     if (!text) return '';
 
+    // Tự động bọc LaTeX nếu phát hiện các mẫu LaTeX thiếu $
+    const wrapped = autoWrapLatex(text);
+
     // Nếu không có ký tự $, chuẩn hóa trực tiếp text
-    if (!text.includes('$')) {
-        return repairVietnameseTextOnly(text);
+    if (!wrapped.includes('$')) {
+        return repairVietnameseTextOnly(wrapped);
     }
 
     // Tách chuỗi thành các phần LaTeX ($...$) và văn bản thường
-    const parts = text.split(/(\$.*?\$)/g);
+    const parts = wrapped.split(/(\$.*?\$)/g);
     
     return parts.map(part => {
         if (part.startsWith('$') && part.endsWith('$')) {
