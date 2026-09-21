@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { X, Download, FileType, AlignLeft, Rows, FileCode, CheckCircle2, ChevronDown, Sparkles, Loader2 } from 'lucide-react';
 import { Quiz, Question } from '../../types';
 import LatexText from '../LatexText';
-import { normalizeFullText, repairVietnameseText } from '../../services/vietnameseFixer';
+import { normalizeFullText, repairVietnameseText, getContextGroupInfo } from '../../services/vietnameseFixer';
 import { exportQuizToJson } from '../../services/quizExport';
 import { convertLatexForWordExport } from '../../services/wordExport';
 import { generateNativeWordDocx } from '../../services/docxExporter';
@@ -572,7 +572,9 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                                     </div>
                                     
                                     <div className="space-y-6">
-                                        {typeQs.map((q, idx) => (
+                                        {typeQs.map((q, idx) => {
+                                            const ctxInfo = getContextGroupInfo(typeQs, idx);
+                                            return (
                                             <div 
                                                 key={q.id} 
                                                 className="question-block" 
@@ -598,8 +600,8 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                                                             lineHeight: '1.3' 
                                                         }}
                                                     >
-                                                        <b style={{ fontStyle: 'normal', color: '#854d0e', marginRight: '4px' }}>Lời dẫn / Dữ liệu dùng chung:</b>
-                                                        <LatexText text={q.context}/>
+                                                        <b style={{ fontStyle: 'normal', color: '#854d0e', marginRight: '4px' }}>{ctxInfo.label || 'Lời dẫn / Dữ liệu dùng chung'}:</b>
+                                                        <LatexText text={ctxInfo.cleanedContext || q.context}/>
                                                     </div>
                                                 )}
 
@@ -705,7 +707,8 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                                                     </p>
                                                 )}
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             );
