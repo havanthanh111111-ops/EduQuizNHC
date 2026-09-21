@@ -584,8 +584,8 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                                                     pageBreakInside: 'avoid' 
                                                 }}
                                             >
-                                                {/* Lời dẫn / Dữ liệu dùng chung nếu có */}
-                                                {q.context && (
+                                                {/* Lời dẫn / Dữ liệu dùng chung nếu có (CHỈ hiển thị 1 lần ở câu đầu tiên của nhóm) */}
+                                                {q.context && ctxInfo.isFirstInGroup && (
                                                     <div 
                                                         className="q-context-block" 
                                                         style={{ 

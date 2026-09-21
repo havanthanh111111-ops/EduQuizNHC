@@ -481,8 +481,8 @@ export default function QuizTaker({ quiz, student, onExit }: QuizTakerProps) {
                             )}
 
                             <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm transition-all hover:border-blue-100">
-                                {/* Lời dẫn / Dữ liệu dùng chung nếu có */}
-                                {q.context && (
+                                {/* Lời dẫn / Dữ liệu dùng chung nếu có (chỉ hiện 1 lần ở câu đầu tiên của nhóm) */}
+                                {q.context && ctxInfo.isFirstInGroup && (
                                     <div className="mb-6 p-5 bg-gradient-to-r from-amber-50 to-orange-50/40 border-2 border-amber-200/80 rounded-2xl">
                                         <div className="flex items-center gap-2 mb-2 text-amber-800 font-black text-xs uppercase tracking-tight">
                                             <Bookmark size={16} className="text-amber-600" />

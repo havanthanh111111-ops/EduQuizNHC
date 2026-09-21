@@ -224,9 +224,13 @@ export const verifyResultExists = async (id: string): Promise<boolean> => {
 
 export const getResultById = async (id: string): Promise<Result | null> => {
     if (!supabase) return null;
-    const { data, error } = await supabase.from('results').select('data').eq('id', id).single();
-    if (error || !data) return null;
-    return data.data as Result;
+    try {
+      const { data, error } = await supabase.from('results').select('data').eq('id', id).limit(1);
+      if (error || !data || data.length === 0) return null;
+      return (data[0].data || data[0]) as Result;
+    } catch (e) {
+      return null;
+    }
 };
 
 export const saveResult = async (result: Result): Promise<void> => {
@@ -249,10 +253,14 @@ export const deleteResult = async (id: string): Promise<void> => {
 
 export const updateResultCode = async (id: string, code: string): Promise<void> => {
     if (!supabase) return;
-    const { data } = await supabase.from('results').select('data').eq('id', id).single();
-    if (!data) return;
-    const resData = { ...data.data, studentCode: code.trim().toUpperCase() };
-    await supabase.from('results').update({ data: resData }).eq('id', id);
+    try {
+      const { data } = await supabase.from('results').select('data').eq('id', id).limit(1);
+      if (!data || data.length === 0 || !data[0]?.data) return;
+      const resData = { ...data[0].data, studentCode: code.trim().toUpperCase() };
+      await supabase.from('results').update({ data: resData }).eq('id', id);
+    } catch (e) {
+      console.warn("Lỗi updateResultCode:", e);
+    }
 };
 
 // --- Users ---
@@ -340,35 +348,66 @@ export const saveUsersBatch = async (users: User[]): Promise<void> => {
 
 export const addPointsToUser = async (userId: string, points: number): Promise<void> => {
     if (!supabase) return;
-    const { data } = await supabase.from('users').select('data').eq('id', userId).single();
-    if (data) {
-      const userData = { ...data.data, points: (data.data.points || 0) + points };
-      await supabase.from('users').update({ data: userData }).eq('id', userId);
+    try {
+      const { data } = await supabase.from('users').select('data').eq('id', userId).limit(1);
+      if (data && data.length > 0 && data[0]?.data) {
+        const userData = { ...data[0].data, points: (data[0].data.points || 0) + points };
+        await supabase.from('users').update({ data: userData }).eq('id', userId);
+      }
+    } catch (e) {
+      console.warn("Lỗi addPointsToUser:", e);
     }
 };
 
 export const findUserByStudentCode = async (code: string): Promise<User | undefined> => {
   if (!supabase) return undefined;
-  console.log("Supabase: Đang tìm User qua mã HS:", code.trim().toUpperCase());
-  const { data, error } = await supabase.from('users').select('data').filter('data->>studentCode', 'eq', code.trim().toUpperCase()).maybeSingle();
-  if (error) {
-    console.error("Lỗi Supabase khi tìm mã HS:", error);
+  const cleanCode = code.trim();
+  const upperCode = cleanCode.toUpperCase();
+  console.log("Supabase: Đang tìm User qua mã HS:", upperCode);
+  try {
+    // Sử dụng limit(1) thay cho maybeSingle() để tránh lỗi PGRST116 nếu CSDL có nhiều bản ghi trùng mã
+    const { data, error } = await supabase
+      .from('users')
+      .select('data')
+      .or(`data->>studentCode.eq.${upperCode},data->>studentCode.eq.${cleanCode}`)
+      .limit(1);
+
+    if (error) {
+      console.error("Lỗi Supabase khi tìm mã HS:", error);
+      return undefined;
+    }
+    const user = (data && data.length > 0) ? (data[0].data as User) : undefined;
+    console.log("Kết quả tìm kiếm User:", user);
+    return user;
+  } catch (e) {
+    console.error("Lỗi ngoại lệ khi tìm mã HS:", e);
     return undefined;
   }
-  console.log("Kết quả tìm kiếm User:", data);
-  return data?.data as User;
 };
 
 export const findUser = async (username: string): Promise<User | undefined> => {
   if (!supabase) return undefined;
-  console.log("Supabase: Đang tìm User qua username:", username.trim().toLowerCase());
-  const { data, error } = await supabase.from('users').select('data').eq('username', username.trim().toLowerCase()).maybeSingle();
-  if (error) {
-    console.error("Lỗi Supabase khi tìm username:", error);
+  const cleanUser = username.trim().toLowerCase();
+  console.log("Supabase: Đang tìm User qua username:", cleanUser);
+  try {
+    // Sử dụng limit(1) thay cho maybeSingle() để an toàn và tối ưu
+    const { data, error } = await supabase
+      .from('users')
+      .select('data')
+      .eq('username', cleanUser)
+      .limit(1);
+
+    if (error) {
+      console.error("Lỗi Supabase khi tìm username:", error);
+      return undefined;
+    }
+    const user = (data && data.length > 0) ? (data[0].data as User) : undefined;
+    console.log("Kết quả tìm kiếm User:", user);
+    return user;
+  } catch (e) {
+    console.error("Lỗi ngoại lệ khi tìm username:", e);
     return undefined;
   }
-  console.log("Kết quả tìm kiếm User:", data);
-  return data?.data as User;
 };
 
 export const testSupabaseConnection = async (): Promise<{success: boolean, message: string}> => {
@@ -403,11 +442,15 @@ export const deleteUser = async (id: string): Promise<void> => {
 
 export const changePassword = async (userId: string, newPassword: string): Promise<boolean> => {
     if (!supabase) return false;
-    const { data } = await supabase.from('users').select('data').eq('id', userId).single();
-    if (!data) return false;
-    const userData = { ...data.data, password: newPassword };
-    const { error } = await supabase.from('users').update({ data: userData }).eq('id', userId);
-    return !error;
+    try {
+      const { data } = await supabase.from('users').select('data').eq('id', userId).limit(1);
+      if (!data || data.length === 0 || !data[0]?.data) return false;
+      const userData = { ...data[0].data, password: newPassword };
+      const { error } = await supabase.from('users').update({ data: userData }).eq('id', userId);
+      return !error;
+    } catch (e) {
+      return false;
+    }
 };
 
 // Định nghĩa các trường Metadata của Đề thi (chỉ lấy thông tin hiển thị, KHÔNG LẤY cột câu hỏi để giảm 98% băng thông)
@@ -704,18 +747,22 @@ export const getQuizById = async (id: string, forceRefresh: boolean = false): Pr
         }
     } catch (e) {}
 
-    const { data, error } = await supabase.from('quizzes').select('data').eq('id', id).single();
-    if (error || !data) return null;
-    const quiz = data.data as Quiz;
-    quizDetailCache.set(id, quiz);
-
     try {
-        if (typeof sessionStorage !== 'undefined') {
-            sessionStorage.setItem(`quiz_detail_${id}`, JSON.stringify(quiz));
-        }
-    } catch (e) {}
+      const { data, error } = await supabase.from('quizzes').select('data').eq('id', id).limit(1);
+      if (error || !data || data.length === 0) return null;
+      const quiz = (data[0].data || data[0]) as Quiz;
+      quizDetailCache.set(id, quiz);
 
-    return quiz;
+      try {
+          if (typeof sessionStorage !== 'undefined') {
+              sessionStorage.setItem(`quiz_detail_${id}`, JSON.stringify(quiz));
+          }
+      } catch (e) {}
+
+      return quiz;
+    } catch (e) {
+      return null;
+    }
 };
 
 export const saveQuiz = async (quiz: Quiz): Promise<void> => {

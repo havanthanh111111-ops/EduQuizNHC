@@ -1047,8 +1047,8 @@ export async function generateNativeWordDocx(
       const levelTag = q.level ? `[${q.level.toUpperCase()}] ` : '';
       const ctxInfo = getContextGroupInfo(mcqQs, idx);
 
-      // Lời dẫn / dữ liệu dùng chung nếu có
-      if (q.context) {
+      // Lời dẫn / dữ liệu dùng chung nếu có (Chỉ xuất 1 lần ở câu đầu tiên trong nhóm)
+      if (q.context && ctxInfo.isFirstInGroup) {
         contentElements.push(
           new Paragraph({
             children: [
@@ -1264,7 +1264,7 @@ export async function generateNativeWordDocx(
       const levelTag = q.level ? `[${q.level.toUpperCase()}] ` : '';
       const ctxInfo = getContextGroupInfo(groupTfQs, idx);
 
-      if (q.context) {
+      if (q.context && ctxInfo.isFirstInGroup) {
         contentElements.push(
           new Paragraph({
             children: [
@@ -1404,7 +1404,7 @@ export async function generateNativeWordDocx(
       const levelTag = q.level ? `[${q.level.toUpperCase()}] ` : '';
       const ctxInfo = getContextGroupInfo(shortQs, idx);
 
-      if (q.context) {
+      if (q.context && ctxInfo.isFirstInGroup) {
         contentElements.push(
           new Paragraph({
             children: [
