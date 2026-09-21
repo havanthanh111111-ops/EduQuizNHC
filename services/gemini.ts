@@ -183,7 +183,17 @@ const stripOptionLabel = (text: string): string => {
 };
 
 const EXTRACTION_INSTRUCTION = `Bạn là chuyên gia trích xuất và phân loại đề thi THPT quốc gia Việt Nam (Toán, Lý, Hóa, Sinh,...).
-NHIỆM VỤ: Chuyển đổi nội dung được cung cấp thành danh sách JSON chuẩn theo cấu trúc phân loại mức độ nhận thức.
+NHIỆM VỤ: Chuyển đổi nội dung được cung cấp thành danh sách JSON chuẩn theo cấu trúc phân loại mức độ nhận thức và chùm dữ liệu dùng chung.
+
+QUY TẮC BÓC TÁCH DỮ LIỆU DÙNG CHUNG / LỜI DẪN CHUNG (Trường 'context') - BẮT BUỘC & CỰC KỲ QUAN TRỌNG:
+1. Nhận diện chùm câu hỏi có dữ liệu dùng chung:
+   - Khi có một đoạn văn bản, đồ thị, bảng số liệu, bối cảnh thực nghiệm hoặc thông tin được dùng chung cho nhiều câu hỏi (Ví dụ: "Sử dụng dữ liệu sau để trả lời Câu 1, Câu 2", "Dựa vào bảng số liệu sau trả lời từ câu 3 đến câu 5", "Thông tin chung cho các câu 15-18", hoặc các đoạn dẫn đầu một chùm câu hỏi).
+   - AI BẮT BUỘC trích xuất nguyên vẹn toàn bộ đoạn thông tin/dữ liệu/lời dẫn dùng chung này và đưa vào trường 'context' của TẤT CẢ các câu hỏi thuộc chùm đó.
+2. Nội dung câu hỏi ('text'):
+   - Trường 'text' của từng câu hỏi CHỈ CHỨA nội dung yêu cầu riêng biệt của câu đó (ví dụ: "Tính gia tốc chuyển động của vật...", "Góc lệch cực đại của con lắc bằng bao nhiêu?").
+   - TUYỆT ĐỐI KHÔNG lặp lại đoạn dữ liệu dùng chung vào 'text'.
+3. Câu hỏi độc lập:
+   - Nếu câu hỏi đứng riêng rẽ, không có lời dẫn/dữ liệu dùng chung cho nhiều câu, để trường 'context': null hoặc không điền.
 
 QUY TẮC PHÂN LOẠI MỨC ĐỘ NHẬN THỨC (level: "B" | "H" | "VD" | "VDC") - BẮT BUỘC:
 Mỗi câu hỏi và mỗi ý con a, b, c, d của câu Đúng/Sai BẮT BUỘC phải có trường 'level' thuộc một trong 4 mức độ:
@@ -199,11 +209,13 @@ QUY TẮC TRÍCH XUẤT ĐẶC BIỆT:
 QUY TẮC CẤU TRÚC CHI TIẾT:
 1. MCQ (Trắc nghiệm 4 lựa chọn):
    - 'type': "mcq"
+   - 'context': Lời dẫn/dữ liệu dùng chung (nếu có) hoặc null
    - 'level': "B" | "H" | "VD" | "VDC"
    - 'options': Mảng 4 phương án đã làm sạch (xóa "A.", "B.", "C.", "D.").
    - 'correctAnswer': BẮT BUỘC điền nội dung của phương án đúng (không kèm nhãn A, B, C, D).
 2. GROUP-TF (Trắc nghiệm Đúng/Sai):
    - 'type': "group-tf"
+   - 'context': Lời dẫn/dữ liệu dùng chung (nếu có) hoặc null
    - 'level': Mức độ chung của câu ("B" | "H" | "VD" | "VDC").
    - 'subQuestions': Mảng 4 ý (a, b, c, d), mỗi ý có:
      + 'text': Nội dung ý (đã xóa nhãn "a)", "b)").
@@ -212,6 +224,7 @@ QUY TẮC CẤU TRÚC CHI TIẾT:
    - 'solution': Lời giải chi tiết giải thích cho cả 4 ý: a) Đúng vì... b) Sai vì...
 3. SHORT (Trả lời ngắn):
    - 'type': "short"
+   - 'context': Lời dẫn/dữ liệu dùng chung (nếu có) hoặc null
    - 'level': "B" | "H" | "VD" | "VDC" (thường là "VD" hoặc "VDC")
    - 'correctAnswer': Giá trị số hoặc biểu thức ngắn (VD: "12.5", "-4")
    - 'options': null
@@ -229,6 +242,16 @@ const processAIQuestions = (rawData: any[]): Question[] => {
         let extractedMain = extractLevelFromText(item.text || "");
         let finalLevel = normalizeLevel(rawLevel) || extractedMain.level;
         let cleanedText = extractedMain.cleanText;
+
+        // Xử lý dữ liệu dùng chung / lời dẫn chung
+        const rawContext = item.context ?? item.loi_dan ?? item.dan_nhap ?? item.doan_van ?? item.bai_doc ?? item.common_data ?? item.shared_context ?? item.shared_text ?? item.sharedContext;
+        let finalContext: string | undefined = undefined;
+        if (typeof rawContext === 'string') {
+            const trimmed = rawContext.trim();
+            if (trimmed && trimmed.toLowerCase() !== 'null' && trimmed.toLowerCase() !== 'undefined') {
+                finalContext = trimmed.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$');
+            }
+        }
 
         if (type === 'mcq' && item.correctAnswer && item.options) {
             let ansText = item.correctAnswer.trim();
@@ -270,7 +293,7 @@ const processAIQuestions = (rawData: any[]): Question[] => {
             id: item.id || uuidv4(),
             chapterName: item.chapterName ? String(item.chapterName).trim() : undefined,
             chapterId: item.chapterId ? String(item.chapterId).trim() : undefined,
-            context: item.context ? String(item.context).trim() : undefined,
+            context: finalContext,
             text: cleanedText,
             level: finalLevel,
             points: item.points || (type === 'mcq' ? 0.25 : type === 'group-tf' ? 1.0 : 0.5),
@@ -433,6 +456,7 @@ QUY TẮC KỸ THUẬT BẮT BUỘC:
                             properties: {
                                 type: { type: Type.STRING },
                                 text: { type: Type.STRING },
+                                context: { type: Type.STRING, nullable: true },
                                 level: { type: Type.STRING, nullable: true },
                                 points: { type: Type.NUMBER },
                                 options: { type: Type.ARRAY, items: { type: Type.STRING }, nullable: true },
@@ -490,6 +514,7 @@ export const parseQuestionsFromPDF = async (base64Data: string): Promise<Questio
                   properties: {
                       type: { type: Type.STRING },
                       text: { type: Type.STRING },
+                      context: { type: Type.STRING, nullable: true },
                       level: { type: Type.STRING, nullable: true },
                       points: { type: Type.NUMBER },
                       options: { type: Type.ARRAY, items: { type: Type.STRING }, nullable: true },
@@ -768,6 +793,7 @@ export const parseQuestionsFromText = async (rawText: string): Promise<Question[
                             properties: {
                                 type: { type: Type.STRING },
                                 text: { type: Type.STRING },
+                                context: { type: Type.STRING, nullable: true },
                                 level: { type: Type.STRING, nullable: true },
                                 points: { type: Type.NUMBER },
                                 options: { type: Type.ARRAY, items: { type: Type.STRING }, nullable: true },
