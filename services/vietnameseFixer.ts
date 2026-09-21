@@ -66,8 +66,14 @@
     export function repairVietnameseTextOnly(raw: string): string {
         if (!raw) return '';
 
+        // 0. Loại bỏ ký tự null \u0000 và các ký tự điều khiển lỗi không hợp lệ trong PostgreSQL/JSON
+        let text = raw
+            .replace(/\0/g, '')
+            .replace(/\\u0000/g, '')
+            .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF]/g, '');
+
         // 1. Chuẩn hóa Unicode sang dạng dựng sẵn (NFC)
-        let text = raw.normalize('NFC');
+        text = text.normalize('NFC');
 
         // 2. Xóa các dấu thanh rác chèn ngay sau ký tự tiếng Việt đã có dấu
         // Ví dụ: Đố´i -> Đối, chấ´t -> chất, cấ´u -> cấu, biế´n -> biến, đấ´t -> đất
@@ -176,10 +182,16 @@
     export function autoWrapLatex(text: string): string {
         if (!text) return '';
         
+        // 0. Loại bỏ ký tự null và ký tự điều khiển lỗi
+        const cleanText = text
+            .replace(/\0/g, '')
+            .replace(/\\u0000/g, '')
+            .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF]/g, '');
+
         // 1. Chuyển đổi \( ... \) và \[ ... \] thành $ ... $ và $$ ... $$
-        let res = text
-            .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$')
-            .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$');
+        let res = cleanText
+            .replace(/\\\(([\s\S]*?)\\\)/g, (_m, g1) => `$${g1}$`)
+            .replace(/\\\[([\s\S]*?)\\\]/g, (_m, g1) => `$$${g1}$$`);
 
         // 2. Chuẩn hóa dấu phẩy số thập phân trong khối LaTeX $12,5$ -> $12{,}5$
         res = res.replace(/\$([^$]+)\$/g, (_m, inner) => {
