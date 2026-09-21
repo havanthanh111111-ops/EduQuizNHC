@@ -12,9 +12,14 @@ export function shuffleArray<T>(array: T[]): T[] {
   return result;
 }
 
+const normalizeContext = (c?: string): string => {
+  if (!c) return '';
+  return c.replace(/\r\n/g, '\n').trim();
+};
+
 /**
  * Gom nhóm các câu hỏi có chung ngữ cảnh/lời dẫn (context) để khi xáo trộn,
- * các câu hỏi trong cùng chùm dữ liệu vẫn đi liền với nhau.
+ * các câu hỏi trong cùng chùm dữ liệu BẮT BUỘC đi liền với nhau và GIỮ NGUYÊN thứ tự nội bộ.
  */
 export function groupQuestionsByContext(questions: Question[]): Question[][] {
   const groups: Question[][] = [];
@@ -22,7 +27,7 @@ export function groupQuestionsByContext(questions: Question[]): Question[][] {
   let currentContext: string | undefined = undefined;
 
   for (const q of questions) {
-    const ctx = (q.context || '').trim();
+    const ctx = normalizeContext(q.context);
     if (ctx && currentContext && ctx === currentContext) {
       currentGroup.push(q);
     } else {
