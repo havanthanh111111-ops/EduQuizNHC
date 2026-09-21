@@ -25,7 +25,7 @@ import {
   createMathBase,
 } from 'docx';
 import { Quiz, Question } from '../types';
-import { normalizeFullText, repairVietnameseText } from './vietnameseFixer';
+import { normalizeFullText, repairVietnameseText, getContextGroupInfo } from './vietnameseFixer';
 
 /**
  * Native Word Equation Accent Component (m:acc)
@@ -1045,6 +1045,7 @@ export async function generateNativeWordDocx(
       const q = mcqQs[idx];
       const qIndex = idx + 1;
       const levelTag = q.level ? `[${q.level.toUpperCase()}] ` : '';
+      const ctxInfo = getContextGroupInfo(mcqQs, idx);
 
       // Lời dẫn / dữ liệu dùng chung nếu có
       if (q.context) {
@@ -1052,13 +1053,13 @@ export async function generateNativeWordDocx(
           new Paragraph({
             children: [
               new TextRun({
-                text: 'Lời dẫn / Dữ liệu dùng chung: ',
+                text: `${ctxInfo.label || 'Lời dẫn / Dữ liệu dùng chung'}: `,
                 font: 'Times New Roman',
                 size: 22,
                 bold: true,
                 color: '854d0e',
               }),
-              ...parseTextWithMath(q.context, { size: 22, italics: true }),
+              ...parseTextWithMath(ctxInfo.cleanedContext || q.context, { size: 22, italics: true }),
             ],
             indent: { left: 180 },
             spacing: { before: 80, after: 60 },
@@ -1261,19 +1262,20 @@ export async function generateNativeWordDocx(
       const q = groupTfQs[idx];
       const qIndex = idx + 1;
       const levelTag = q.level ? `[${q.level.toUpperCase()}] ` : '';
+      const ctxInfo = getContextGroupInfo(groupTfQs, idx);
 
       if (q.context) {
         contentElements.push(
           new Paragraph({
             children: [
               new TextRun({
-                text: 'Lời dẫn / Dữ liệu dùng chung: ',
+                text: `${ctxInfo.label || 'Lời dẫn / Dữ liệu dùng chung'}: `,
                 font: 'Times New Roman',
                 size: 22,
                 bold: true,
                 color: '854d0e',
               }),
-              ...parseTextWithMath(q.context, { size: 22, italics: true }),
+              ...parseTextWithMath(ctxInfo.cleanedContext || q.context, { size: 22, italics: true }),
             ],
             indent: { left: 180 },
             spacing: { before: 80, after: 60 },
@@ -1400,19 +1402,20 @@ export async function generateNativeWordDocx(
       const q = shortQs[idx];
       const qIndex = idx + 1;
       const levelTag = q.level ? `[${q.level.toUpperCase()}] ` : '';
+      const ctxInfo = getContextGroupInfo(shortQs, idx);
 
       if (q.context) {
         contentElements.push(
           new Paragraph({
             children: [
               new TextRun({
-                text: 'Lời dẫn / Dữ liệu dùng chung: ',
+                text: `${ctxInfo.label || 'Lời dẫn / Dữ liệu dùng chung'}: `,
                 font: 'Times New Roman',
                 size: 22,
                 bold: true,
                 color: '854d0e',
               }),
-              ...parseTextWithMath(q.context, { size: 22, italics: true }),
+              ...parseTextWithMath(ctxInfo.cleanedContext || q.context, { size: 22, italics: true }),
             ],
             indent: { left: 180 },
             spacing: { before: 80, after: 60 },
