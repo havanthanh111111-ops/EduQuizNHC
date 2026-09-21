@@ -47,6 +47,37 @@ export const isDatabaseConnected = (): boolean => {
     return !!supabase;
 };
 
+/**
+ * Chuẩn hóa và làm sạch dữ liệu trước khi lưu vào Supabase JSONB / PostgreSQL
+ * Triệt tiêu hoàn toàn lỗi: "unsupported Unicode escape sequence"
+ * 1. Xóa ký tự null (\u0000, \0, \\u0000)
+ * 2. Xóa các ký tự điều khiển không in được (control characters 0x00-0x1F ngoại trừ tab, \n, \r)
+ * 3. Xóa các ký tự lone surrogates (\uD800 - \uDFFF) bị lỗi
+ */
+export function sanitizeForJsonB<T>(obj: T): T {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj === 'string') {
+    return (obj as string)
+      .replace(/\0/g, '')
+      .replace(/\\u0000/g, '')
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF]/g, '') as unknown as T;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(item => sanitizeForJsonB(item)) as unknown as T;
+  }
+  if (typeof obj === 'object') {
+    const cleaned: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      const cleanKey = typeof key === 'string'
+        ? key.replace(/\0/g, '').replace(/\\u0000/g, '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF]/g, '')
+        : key;
+      cleaned[cleanKey] = sanitizeForJsonB(value);
+    }
+    return cleaned as T;
+  }
+  return obj;
+}
+
 const handleSupabaseError = (error: any, context: string) => {
     if (error) {
         console.error(`LỖI SUPABASE [${context}]:`, error);
@@ -237,7 +268,8 @@ export const saveResult = async (result: Result): Promise<void> => {
   if (!supabase) throw new Error("Mất kết nối Database");
   invalidateCache('student_results');
   invalidateCache('published_results');
-  const payload = { id: result.id, quiz_id: result.quizId, student_id: result.studentId, data: result };
+  const sanitizedResult = sanitizeForJsonB(result);
+  const payload = { id: sanitizedResult.id, quiz_id: sanitizedResult.quizId, student_id: sanitizedResult.studentId, data: sanitizedResult };
   const { error } = await supabase.from('results').insert(payload);
   handleSupabaseError(error, "Lưu kết quả thi");
 };
@@ -767,13 +799,13 @@ export const getQuizById = async (id: string, forceRefresh: boolean = false): Pr
 
 export const saveQuiz = async (quiz: Quiz): Promise<void> => {
   if (!supabase) throw new Error("Mất kết nối Database");
-  const enrichedQuiz = { 
+  const enrichedQuiz = sanitizeForJsonB({ 
     ...quiz, 
     questionCount: quiz.questions.length,
     isSyncedToBank: quiz.isSyncedToBank ?? false 
-  };
+  });
   updateQuizInCache(enrichedQuiz);
-  const { error } = await supabase.from('quizzes').insert({ id: quiz.id, grade: quiz.grade, data: enrichedQuiz });
+  const { error } = await supabase.from('quizzes').insert({ id: enrichedQuiz.id, grade: enrichedQuiz.grade, data: enrichedQuiz });
   handleSupabaseError(error, "Lưu đề thi mới");
 };
 
@@ -781,11 +813,11 @@ export const updateQuiz = async (enrichedQuiz: Quiz): Promise<void> => {
   if (!supabase) throw new Error("Mất kết nối Database");
   // Khi chỉnh sửa đề thi (thêm/sửa câu hỏi, đổi nội dung...), đặt lại cờ isSyncedToBank: false
   // để tính năng quét đồng bộ nhận diện được đây là đề có thay đổi cần quét cập nhật vào Ngân hàng
-  const quiz = { 
+  const quiz = sanitizeForJsonB({ 
     ...enrichedQuiz, 
     questionCount: enrichedQuiz.questions.length,
     isSyncedToBank: false 
-  };
+  });
   updateQuizInCache(quiz);
   const { error } = await supabase.from('quizzes').update({ data: quiz, grade: enrichedQuiz.grade }).eq('id', enrichedQuiz.id);
   handleSupabaseError(error, "Cập nhật đề thi");
