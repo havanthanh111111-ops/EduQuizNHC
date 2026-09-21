@@ -2,7 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Question, Grade, QuestionLevel, SubQuestion, QuestionType } from "../types";
 import { v4 as uuidv4 } from 'uuid';
-import { normalizeFullText } from './vietnameseFixer';
+import { normalizeFullText, autoWrapLatex, cleanSharedContextBody } from './vietnameseFixer';
 
 const cleanJsonString = (str: string): string => {
     return str.replace(/```json/gi, "").replace(/```/gi, "").trim();
@@ -226,22 +226,24 @@ QUY TẮC CẤU TRÚC CHI TIẾT:
    - 'type': "short"
    - 'context': Lời dẫn/dữ liệu dùng chung (nếu có) hoặc null
    - 'level': "B" | "H" | "VD" | "VDC" (thường là "VD" hoặc "VDC")
-   - 'correctAnswer': Giá trị số hoặc biểu thức ngắn (VD: "12.5", "-4")
+   - 'correctAnswer': Giá trị số hoặc biểu thức ngắn (VD: "12.5", "-4", "$12{,}5$", "$2\\pi$")
    - 'options': null
-4. LaTeX & Công thức: Mọi ký hiệu, công thức toán/lý/hóa BẮT BUỘC bọc trong cặp dấu $...$ (VD: $x^2 + y^2 = 4$).
+4. LaTeX & Công thức (QUAN TRỌNG):
+   - MỌI công thức toán/lý/hóa, phương trình, số mũ, chỉ số dưới, phân số (\frac), căn (\sqrt), hằng số/đại lượng (\alpha, \pi, \Omega, \Delta), số đo kèm đơn vị (VD: $12{,}5\\text{ m/s}$, $x = 4\\cos(10\\pi t)$, $\\frac{1}{2}$, $\\sqrt{3}$) BẮT BUỘC PHẢI BAO TRONG CẶP DẤU $...$.
+   - Tuyệt đối không để sót công thức/phân số/ký hiệu toán trần mà không có cặp dấu $.
 `;
 
 const processAIQuestions = (rawData: any[]): Question[] => {
     return rawData.map((item: any) => {
         const type = item.type?.toLowerCase() || 'mcq';
-        const strippedOptions = item.options ? item.options.map((opt: string) => stripOptionLabel(opt)) : (type === 'mcq' ? [] : undefined);
-        let finalCorrectAnswer = item.correctAnswer;
+        const strippedOptions = item.options ? item.options.map((opt: string) => autoWrapLatex(stripOptionLabel(opt))) : (type === 'mcq' ? [] : undefined);
+        let finalCorrectAnswer = item.correctAnswer ? autoWrapLatex(String(item.correctAnswer)) : item.correctAnswer;
 
         // Xử lý trích xuất level từ mọi trường hoặc từ text câu hỏi
         const rawLevel = item.level ?? item.muc_do ?? item.mucdo ?? item.mucDo ?? item.do_kho ?? item.dokho ?? item.doKho ?? item.difficulty ?? item.bloom ?? item.bloomLevel ?? item.level_code ?? item.cognitiveLevel ?? item.cognitive_level ?? item.rank ?? item.phan_loai;
         let extractedMain = extractLevelFromText(item.text || "");
         let finalLevel = normalizeLevel(rawLevel) || extractedMain.level;
-        let cleanedText = extractedMain.cleanText;
+        let cleanedText = autoWrapLatex(extractedMain.cleanText);
 
         // Xử lý dữ liệu dùng chung / lời dẫn chung
         const rawContext = item.context ?? item.loi_dan ?? item.dan_nhap ?? item.doan_van ?? item.bai_doc ?? item.common_data ?? item.shared_context ?? item.shared_text ?? item.sharedContext;
@@ -249,7 +251,7 @@ const processAIQuestions = (rawData: any[]): Question[] => {
         if (typeof rawContext === 'string') {
             const trimmed = rawContext.trim();
             if (trimmed && trimmed.toLowerCase() !== 'null' && trimmed.toLowerCase() !== 'undefined') {
-                finalContext = trimmed.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$');
+                finalContext = autoWrapLatex(trimmed.replace(/\\\(|\\\)/g, '$').replace(/\\\[|\\\]/g, '$$'));
             }
         }
 
@@ -261,10 +263,10 @@ const processAIQuestions = (rawData: any[]): Question[] => {
                 const label = matchLabel[1].toUpperCase();
                 const index = label.charCodeAt(0) - 65;
                 if (item.options[index]) {
-                    finalCorrectAnswer = stripOptionLabel(item.options[index]);
+                    finalCorrectAnswer = autoWrapLatex(stripOptionLabel(item.options[index]));
                 }
             } else {
-                finalCorrectAnswer = stripOptionLabel(ansText);
+                finalCorrectAnswer = autoWrapLatex(stripOptionLabel(ansText));
             }
         }
 
@@ -284,7 +286,7 @@ const processAIQuestions = (rawData: any[]): Question[] => {
         }
 
         if (type === 'short') {
-            finalCorrectAnswer = item.correctAnswer?.toString().trim() || "";
+            finalCorrectAnswer = autoWrapLatex(item.correctAnswer?.toString().trim() || "");
         }
 
         return {
@@ -299,13 +301,14 @@ const processAIQuestions = (rawData: any[]): Question[] => {
             points: item.points || (type === 'mcq' ? 0.25 : type === 'group-tf' ? 1.0 : 0.5),
             options: strippedOptions,
             correctAnswer: finalCorrectAnswer,
+            solution: item.solution ? autoWrapLatex(String(item.solution)) : undefined,
             subQuestions: item.subQuestions ? item.subQuestions.map((sq: any) => {
                 const sqRawLevel = sq.level ?? sq.muc_do ?? sq.mucdo ?? sq.mucDo ?? sq.do_kho ?? sq.dokho ?? sq.doKho ?? sq.difficulty ?? sq.bloom ?? sq.bloomLevel ?? sq.level_code ?? sq.cognitiveLevel;
                 const sqExtract = extractLevelFromText(sq.text || "");
                 return { 
                     ...sq, 
                     id: uuidv4(),
-                    text: stripOptionLabel(sqExtract.cleanText),
+                    text: autoWrapLatex(stripOptionLabel(sqExtract.cleanText)),
                     level: normalizeLevel(sqRawLevel) || sqExtract.level,
                     correctAnswer: (sq.correctAnswer === 'True' || sq.correctAnswer === 'Đúng' || sq.correctAnswer === 'Đ' || sq.correctAnswer === 'T' || sq.correctAnswer === 'true' || sq.correctAnswer === '1') ? 'True' : 'False'
                 };
