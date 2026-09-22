@@ -641,9 +641,13 @@ QUY TẮC KỸ THUẬT BẮT BUỘC:
     }
 };
 
-export const parseQuestionsFromPDF = async (base64Data: string): Promise<Question[]> => {
+export const parseQuestionsFromPDF = async (base64Data: string, includeSolutions: boolean = true): Promise<Question[]> => {
   const ai = getAIClient();
   
+  const modeInstruction = includeSolutions 
+    ? `YÊU CẦU BÓC TÁCH ĐẦY ĐỦ (KÈM LỜI GIẢI CHI TIẾT):\n- Quét kỹ TOÀN BỘ tất cả các trang của tài liệu PDF từ trang đầu đến trang cuối cùng.\n- BẮT BUỘC TRÍCH XUẤT 100% ĐẦY ĐỦ TẤT CẢ các câu hỏi có trong tài liệu (ví dụ có 28 câu, 40 câu hay 50 câu thì phải trả về đủ 100% trong mảng JSON, tuyệt đối không được dừng lại giữa chừng hay chỉ bóc tách 8-9 câu).\n- Viết lời giải chi tiết, rõ ràng cho từng câu hỏi / từng ý Đúng-Sai.`
+    : `YÊU CẦU BÓC TÁCH NHANH (CHỈ ĐÁP ÁN - KHÔNG GIẢI CHI TIẾT):\n- Quét kỹ TOÀN BỘ tất cả các trang của tài liệu PDF từ trang đầu đến trang cuối cùng.\n- BẮT BUỘC TRÍCH XUẤT 100% ĐẦY ĐỦ TẤT CẢ các câu hỏi có trong tài liệu (ví dụ 28, 40 hay 50 câu tuyệt đối không bỏ sót câu nào).\n- BẮT BUỘC ĐỂ TRƯỜNG 'solution': "" (để chuỗi rỗng), KHÔNG viết lời giải chi tiết để tiết kiệm tối đa dung lượng token và bóc tách siêu tốc trọn vẹn 100% đề thi.`;
+
   try {
     const response = await callAIWithFallback((model) => 
       ai.models.generateContent({
@@ -651,7 +655,7 @@ export const parseQuestionsFromPDF = async (base64Data: string): Promise<Questio
         contents: {
             parts: [
                 { inlineData: { mimeType: "application/pdf", data: base64Data } },
-                { text: `${EXTRACTION_INSTRUCTION}\n\nYÊU CẦU ĐẶC BIỆT KHI ĐỌC TÀI LIỆU PDF:\n- Quét kỹ TOÀN BỘ tất cả các trang của tài liệu PDF từ trang đầu đến trang cuối cùng.\n- BẮT BUỘC TRÍCH XUẤT 100% ĐẦY ĐỦ TẤT CẢ các câu hỏi có trong tài liệu (ví dụ có 28 câu, 40 câu hay 50 câu thì phải trả về đủ 100% trong mảng JSON, tuyệt đối không được dừng lại giữa chừng hay chỉ bóc tách 8-9 câu).` }
+                { text: `${EXTRACTION_INSTRUCTION}\n\n${modeInstruction}` }
             ]
         },
         config: { 
@@ -684,7 +688,7 @@ export const parseQuestionsFromPDF = async (base64Data: string): Promise<Questio
                           }
                       }
                   },
-                  required: ["type", "text", "solution"]
+                  required: ["type", "text"]
               }
           }
         }
@@ -1002,9 +1006,10 @@ const splitSingleSectionByQuestions = (sectionText: string, targetBatchSize: num
     return [text];
 };
 
-export const parseQuestionsFromText = async (rawText: string): Promise<Question[]> => {
+export const parseQuestionsFromText = async (rawText: string, includeSolutions: boolean = true): Promise<Question[]> => {
     const ai = getAIClient();
-    const batches = splitTextIntoBatches(rawText, 14);
+    const batchSize = includeSolutions ? 14 : 18;
+    const batches = splitTextIntoBatches(rawText, batchSize);
 
     // Schema chung cho từng lô bóc tách
     const batchSchema = {
@@ -1034,12 +1039,18 @@ export const parseQuestionsFromText = async (rawText: string): Promise<Question[
                     }
                 }
             },
-            required: ["type", "text", "solution"]
+            required: ["type", "text"]
         }
     };
 
+    const modeInstruction = includeSolutions 
+        ? `BẮT BUỘC TRÍCH XUẤT 100% TẤT CẢ CÁC CÂU HỎI KÈM LỜI GIẢI CHI TIẾT (solution).`
+        : `CHẾ ĐỘ BÓC TÁCH NHANH (CHỈ ĐÁP ÁN - KHÔNG GIẢI CHI TIẾT): BẮT BUỘC TRÍCH XUẤT 100% TẤT CẢ CÁC CÂU HỎI. Để trường 'solution': "" (chuỗi rỗng), KHÔNG cần giải chi tiết để tăng tốc độ tối đa.`;
+
     const processSingleBatchWithRetry = async (batchText: string, batchIndex: number, totalBatches: number): Promise<any[]> => {
         const prompt = `${EXTRACTION_INSTRUCTION}
+
+${modeInstruction}
 
 ${totalBatches > 1 ? `[ĐOẠN TRÍCH XUẤT ${batchIndex + 1}/${totalBatches}] - BẮT BUỘC TRÍCH XUẤT 100% TẤT CẢ CÁC CÂU HỎI TRONG ĐOẠN NÀY, KHÔNG ĐƯỢC BỎ SÓT CÂU NÀO:\n` : 'NỘI DUNG VĂN BẢN CẦN TRÍCH XUẤT VÀ PHÂN LOẠI MỨC ĐỘ:\n'}${batchText}`;
 
