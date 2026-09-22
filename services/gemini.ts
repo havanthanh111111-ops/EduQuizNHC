@@ -185,6 +185,16 @@ const stripOptionLabel = (text: string): string => {
 const EXTRACTION_INSTRUCTION = `Bạn là chuyên gia trích xuất và phân loại đề thi THPT quốc gia Việt Nam (Toán, Lý, Hóa, Sinh,...).
 NHIỆM VỤ: Chuyển đổi nội dung được cung cấp thành danh sách JSON chuẩn theo cấu trúc phân loại mức độ nhận thức và chùm dữ liệu dùng chung.
 
+⚠️ QUY TẮC SỐ LƯỢNG & TÍNH TOÀN VẸN (BẮT BUỘC 100% - KHÔNG ĐƯỢC BỎ SÓT):
+1. BẮT BUỘC TRÍCH XUẤT 100% TẤT CẢ CÁC CÂU HỎI TRONG ĐOẠN ĐƯỢC GIAO:
+   - Trong đoạn văn bản có bao nhiêu câu hỏi (Ví dụ: 10 câu, 28 câu, 40 câu) thì bạn BẮT BUỘC phải trích xuất đầy đủ bấy nhiêu câu từ câu đầu tiên đến câu cuối cùng.
+   - TUYỆT ĐỐI KHÔNG ĐƯỢC BỎ SÓT, KHÔNG TỰ Ý RÚT GỌN, KHÔNG DỪNG LẠI GIỮA CHỪNG.
+   - Trích xuất tuần tự toàn bộ các phần: Phần I (Trắc nghiệm nhiều lựa chọn), Phần II (Trắc nghiệm Đúng/Sai), Phần III (Trả lời ngắn).
+2. NỘI DUNG & ĐÁP ÁN:
+   - Giữ nguyên toàn bộ câu từ, số liệu, đơn vị, biểu thức.
+   - Với câu trắc nghiệm Đúng/Sai (group-tf): BẮT BUỘC trích xuất đủ cả 4 ý con (a, b, c, d), kèm theo đáp án Đúng/Sai và lời giải giải thích cho từng ý.
+   - Với câu trả lời ngắn (short): BẮT BUỘC trích xuất đáp số chính xác vào 'correctAnswer'.
+
 QUY TẮC BÓC TÁCH DỮ LIỆU DÙNG CHUNG / LỜI DẪN CHUNG (Trường 'context') - BẮT BUỘC & CỰC KỲ QUAN TRỌNG:
 1. Nhận diện chùm câu hỏi có dữ liệu dùng chung:
    - Khi có một đoạn văn bản, đồ thị, bảng số liệu, bối cảnh thực nghiệm hoặc thông tin được dùng chung cho nhiều câu hỏi (Ví dụ: "Sử dụng dữ liệu sau để trả lời Câu 1, Câu 2", "Dựa vào bảng số liệu sau trả lời từ câu 3 đến câu 5", "Thông tin chung cho các câu 15-18", hoặc các đoạn dẫn đầu một chùm câu hỏi).
@@ -505,11 +515,12 @@ export const parseQuestionsFromPDF = async (base64Data: string): Promise<Questio
         contents: {
             parts: [
                 { inlineData: { mimeType: "application/pdf", data: base64Data } },
-                { text: EXTRACTION_INSTRUCTION }
+                { text: `${EXTRACTION_INSTRUCTION}\n\nYÊU CẦU ĐẶC BIỆT KHI ĐỌC TÀI LIỆU PDF:\n- Quét kỹ TOÀN BỘ tất cả các trang của tài liệu PDF từ trang đầu đến trang cuối cùng.\n- BẮT BUỘC TRÍCH XUẤT 100% ĐẦY ĐỦ TẤT CẢ các câu hỏi có trong tài liệu (ví dụ có 28 câu, 40 câu hay 50 câu thì phải trả về đủ 100% trong mảng JSON, tuyệt đối không được dừng lại giữa chừng hay chỉ bóc tách 8-9 câu).` }
             ]
         },
         config: { 
           responseMimeType: "application/json",
+          maxOutputTokens: 8192,
           responseSchema: {
               type: Type.ARRAY,
               items: {
@@ -779,54 +790,160 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
     };
 };
 
+/**
+ * Tách văn bản đề thi thành các lô (batch) câu hỏi hợp lý (mỗi lô 6-8 câu)
+ * để AI xử lý hoàn hảo, không bị quá tải token và KHÔNG BAO GIỜ bỏ sót câu hỏi.
+ */
+export const splitTextIntoBatches = (rawText: string, targetBatchSize: number = 7): string[] => {
+    const text = rawText.trim();
+    if (!text) return [];
+
+    // 1. Kiểm tra cấu trúc các PHẦN (PHẦN I, PHẦN II, PHẦN III hoặc Phần 1, Phần 2, Phần 3)
+    const partPattern = /(?:^|\n)(?=(?:PHẦN|Phần|PART|Part|CHỦ ĐỀ|Chủ đề)\s+(?:[I|V|X\d]+|\d+)[:.\s])/;
+    const rawParts = text.split(partPattern).map(p => p.trim()).filter(Boolean);
+
+    if (rawParts.length >= 2 && rawParts.length <= 10) {
+        const allBatches: string[] = [];
+        for (const part of rawParts) {
+            const subBatches = splitSingleSectionByQuestions(part, targetBatchSize);
+            allBatches.push(...subBatches);
+        }
+        if (allBatches.length > 0) return allBatches;
+    }
+
+    return splitSingleSectionByQuestions(text, targetBatchSize);
+};
+
+const splitSingleSectionByQuestions = (sectionText: string, targetBatchSize: number = 7): string[] => {
+    const text = sectionText.trim();
+    if (!text) return [];
+
+    // Nhận diện ranh giới câu hỏi: "Câu 1:", "Câu 1.", "Bài 1:", "Question 1:"
+    const qBoundaryRegex = /(?:^|\n)(?=(?:Câu|CÂU|Bài|BÀI|Question|QUESTION)\s*\d+[\.\:\-\/\s])/;
+    const rawItems = text.split(qBoundaryRegex).map(item => item.trim()).filter(Boolean);
+
+    // Nếu nhận diện được từ 3 câu hỏi trở lên
+    if (rawItems.length >= 3) {
+        const batches: string[] = [];
+        for (let i = 0; i < rawItems.length; i += targetBatchSize) {
+            const batchQuestions = rawItems.slice(i, i + targetBatchSize);
+            batches.push(batchQuestions.join('\n\n'));
+        }
+        return batches;
+    }
+
+    // Thử tách theo mẫu số thứ tự: 1., 2., 3. ở đầu dòng
+    const numBoundaryRegex = /(?:^|\n)(?=\d+[\.\:\)]\s+[A-ZÀ-Ỹa-z])/;
+    const numItems = text.split(numBoundaryRegex).map(item => item.trim()).filter(Boolean);
+    if (numItems.length >= 4) {
+        const batches: string[] = [];
+        for (let i = 0; i < numItems.length; i += targetBatchSize) {
+            const batchQuestions = numItems.slice(i, i + targetBatchSize);
+            batches.push(batchQuestions.join('\n\n'));
+        }
+        return batches;
+    }
+
+    // Nếu văn bản dài mà không có đánh số rõ ràng (> 3500 ký tự), chia theo đoạn
+    if (text.length > 3500) {
+        const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+        const batches: string[] = [];
+        let current = '';
+        for (const p of paragraphs) {
+            if (current.length + p.length > 2500 && current.length > 0) {
+                batches.push(current);
+                current = p;
+            } else {
+                current = current ? current + '\n\n' + p : p;
+            }
+        }
+        if (current) batches.push(current);
+        return batches.length > 0 ? batches : [text];
+    }
+
+    return [text];
+};
+
 export const parseQuestionsFromText = async (rawText: string): Promise<Question[]> => {
     const ai = getAIClient();
-    
-    try {
+    const batches = splitTextIntoBatches(rawText, 7);
+
+    // Schema chung cho từng lô bóc tách
+    const batchSchema = {
+        type: Type.ARRAY,
+        items: {
+            type: Type.OBJECT,
+            properties: {
+                type: { type: Type.STRING },
+                text: { type: Type.STRING },
+                context: { type: Type.STRING, nullable: true },
+                level: { type: Type.STRING, nullable: true },
+                points: { type: Type.NUMBER },
+                options: { type: Type.ARRAY, items: { type: Type.STRING }, nullable: true },
+                correctAnswer: { type: Type.STRING, nullable: true },
+                solution: { type: Type.STRING },
+                subQuestions: {
+                    type: Type.ARRAY,
+                    nullable: true,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            text: { type: Type.STRING },
+                            correctAnswer: { type: Type.STRING },
+                            level: { type: Type.STRING, nullable: true }
+                        },
+                        required: ["text", "correctAnswer"]
+                    }
+                }
+            },
+            required: ["type", "text", "solution"]
+        }
+    };
+
+    const processSingleBatch = async (batchText: string, batchIndex: number, totalBatches: number): Promise<any[]> => {
+        const prompt = `${EXTRACTION_INSTRUCTION}
+
+${totalBatches > 1 ? `[ĐOẠN TRÍCH XUẤT ${batchIndex + 1}/${totalBatches}] - BẮT BUỘC TRÍCH XUẤT 100% TẤT CẢ CÁC CÂU HỎI TRONG ĐOẠN NÀY, KHÔNG ĐƯỢC BỎ SÓT CÂU NÀO:\n` : 'NỘI DUNG VĂN BẢN CẦN TRÍCH XUẤT VÀ PHÂN LOẠI MỨC ĐỘ:\n'}${batchText}`;
+
         const response = await callAIWithFallback((model) => 
             ai.models.generateContent({
                 model,
-                contents: `${EXTRACTION_INSTRUCTION}\n\nNỘI DUNG VĂN BẢN CẦN TRÍCH XUẤT VÀ PHÂN LOẠI MỨC ĐỘ:\n${rawText}`,
+                contents: prompt,
                 config: {
                     responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                type: { type: Type.STRING },
-                                text: { type: Type.STRING },
-                                context: { type: Type.STRING, nullable: true },
-                                level: { type: Type.STRING, nullable: true },
-                                points: { type: Type.NUMBER },
-                                options: { type: Type.ARRAY, items: { type: Type.STRING }, nullable: true },
-                                correctAnswer: { type: Type.STRING, nullable: true },
-                                solution: { type: Type.STRING },
-                                subQuestions: {
-                                    type: Type.ARRAY,
-                                    nullable: true,
-                                    items: {
-                                        type: Type.OBJECT,
-                                        properties: {
-                                            text: { type: Type.STRING },
-                                            correctAnswer: { type: Type.STRING },
-                                            level: { type: Type.STRING, nullable: true }
-                                        },
-                                        required: ["text", "correctAnswer"]
-                                    }
-                                }
-                            },
-                            required: ["type", "text", "solution"]
-                        }
-                    }
+                    maxOutputTokens: 8192,
+                    responseSchema: batchSchema
                 }
             })
         );
 
         const textOutput = response.text || "[]";
-        const rawData = JSON.parse(cleanJsonString(textOutput));
-        
-        return processAIQuestions(rawData);
+        return JSON.parse(cleanJsonString(textOutput));
+    };
+
+    try {
+        if (batches.length <= 1) {
+            const rawData = await processSingleBatch(batches[0] || rawText, 0, 1);
+            return processAIQuestions(rawData);
+        }
+
+        // Nếu có nhiều lô câu hỏi: Xử lý theo từng nhóm 2 lô để tốc độ nhanh và tránh rate limit
+        const allRawItems: any[] = [];
+        const CONCURRENT_LIMIT = 2;
+
+        for (let i = 0; i < batches.length; i += CONCURRENT_LIMIT) {
+            const slice = batches.slice(i, i + CONCURRENT_LIMIT);
+            const chunkResults = await Promise.all(
+                slice.map((batchText, idx) => processSingleBatch(batchText, i + idx, batches.length))
+            );
+            for (const res of chunkResults) {
+                if (Array.isArray(res)) {
+                    allRawItems.push(...res);
+                }
+            }
+        }
+
+        return processAIQuestions(allRawItems);
     } catch (error: any) {
         throw new Error("Lỗi bóc tách văn bản: " + formatAIError(error));
     }
