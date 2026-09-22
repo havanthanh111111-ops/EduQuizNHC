@@ -4,8 +4,75 @@ import { Question, Grade, QuestionLevel, SubQuestion, QuestionType } from "../ty
 import { v4 as uuidv4 } from 'uuid';
 import { normalizeFullText, autoWrapLatex, cleanSharedContextBody } from './vietnameseFixer';
 
-const cleanJsonString = (str: string): string => {
-    return str.replace(/```json/gi, "").replace(/```/gi, "").trim();
+export const cleanJsonString = (str: string): string => {
+    if (!str) return "[]";
+    let text = str.trim();
+    // Gỡ bỏ markdown code fences
+    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+
+    // Tìm vị trí mở mảng [ hoặc mở đối tượng {
+    const firstBracket = text.indexOf('[');
+    const firstBrace = text.indexOf('{');
+    let startIdx = -1;
+    let endIdx = -1;
+
+    if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+        startIdx = firstBracket;
+        endIdx = text.lastIndexOf(']');
+    } else if (firstBrace !== -1) {
+        startIdx = firstBrace;
+        endIdx = text.lastIndexOf('}');
+    }
+
+    if (startIdx !== -1 && endIdx !== -1 && endIdx >= startIdx) {
+        return text.substring(startIdx, endIdx + 1);
+    }
+
+    if (startIdx !== -1) {
+        return text.substring(startIdx);
+    }
+
+    return text;
+};
+
+export const safeJsonParse = (str: string, fallback: any = []): any => {
+    if (!str) return fallback;
+    const cleaned = cleanJsonString(str);
+    try {
+        return JSON.parse(cleaned);
+    } catch (primaryErr) {
+        // Cố gắng sửa lỗi JSON bị cắt đuôi (truncated array)
+        try {
+            if (cleaned.startsWith('[')) {
+                const lastBraceIdx = cleaned.lastIndexOf('}');
+                if (lastBraceIdx !== -1) {
+                    const repaired = cleaned.substring(0, lastBraceIdx + 1) + ']';
+                    return JSON.parse(repaired);
+                }
+            } else if (cleaned.startsWith('{')) {
+                const repaired = cleaned + '}';
+                return JSON.parse(repaired);
+            }
+        } catch (repairErr) {}
+
+        // Fallback: Trích xuất từng object câu hỏi riêng biệt bằng regex
+        try {
+            const objectRegex = /\{[\s\S]*?\}(?=\s*(?:,|\s*\]|$))/g;
+            const matches = cleaned.match(objectRegex);
+            if (matches && matches.length > 0) {
+                const extracted: any[] = [];
+                for (const m of matches) {
+                    try {
+                        extracted.push(JSON.parse(m));
+                    } catch {}
+                }
+                if (extracted.length > 0) return extracted;
+            }
+        } catch {}
+
+        console.warn("Không thể parse JSON tự động, trả về fallback:", primaryErr);
+        return fallback;
+    }
 };
 
 const removeVietnameseAccents = (str: string): string => {
@@ -363,10 +430,10 @@ export const getAIKey = (): string => {
 };
 
 export const FALLBACK_MODELS = [
-    'gemini-3.1-flash-lite',
     'gemini-3.8-flash',
     'gemini-flash-latest',
-    'gemini-3-flash-preview'
+    'gemini-3.1-flash-lite',
+    'gemini-3.1-pro-preview'
 ];
 
 export const formatAIError = (error: any): string => {
@@ -556,9 +623,9 @@ export const parseQuestionsFromPDF = async (base64Data: string): Promise<Questio
     );
 
     const textOutput = response.text || "[]";
-    const rawData = JSON.parse(cleanJsonString(textOutput));
+    const rawData = safeJsonParse(textOutput, []);
     
-    return processAIQuestions(rawData);
+    return processAIQuestions(Array.isArray(rawData) ? rawData : []);
   } catch (error: any) {
     throw new Error("Lỗi đọc PDF: " + formatAIError(error));
   }
@@ -568,8 +635,10 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
     let parsed: any;
     if (typeof input === 'string') {
         try {
-            const cleanStr = cleanJsonString(input);
-            parsed = JSON.parse(cleanStr);
+            parsed = safeJsonParse(input, null);
+            if (!parsed) {
+                throw new Error("Dữ liệu JSON không hợp lệ");
+            }
         } catch (e: any) {
             throw new Error("Cấu trúc file hoặc chuỗi JSON không hợp lệ. Vui lòng kiểm tra lại cú pháp JSON!");
         }
@@ -791,10 +860,10 @@ export const parseQuestionsFromJSON = (input: string | any): { questions: Questi
 };
 
 /**
- * Tách văn bản đề thi thành các lô (batch) câu hỏi hợp lý (mỗi lô 6-8 câu)
- * để AI xử lý hoàn hảo, không bị quá tải token và KHÔNG BAO GIỜ bỏ sót câu hỏi.
+ * Tách văn bản đề thi thành các lô (batch) câu hỏi hợp lý (mỗi lô 12-15 câu)
+ * để AI xử lý tối ưu, không bị quá tải token, tránh rate limit và KHÔNG BAO GIỜ bỏ sót câu hỏi.
  */
-export const splitTextIntoBatches = (rawText: string, targetBatchSize: number = 7): string[] => {
+export const splitTextIntoBatches = (rawText: string, targetBatchSize: number = 14): string[] => {
     const text = rawText.trim();
     if (!text) return [];
 
@@ -814,7 +883,7 @@ export const splitTextIntoBatches = (rawText: string, targetBatchSize: number = 
     return splitSingleSectionByQuestions(text, targetBatchSize);
 };
 
-const splitSingleSectionByQuestions = (sectionText: string, targetBatchSize: number = 7): string[] => {
+const splitSingleSectionByQuestions = (sectionText: string, targetBatchSize: number = 14): string[] => {
     const text = sectionText.trim();
     if (!text) return [];
 
@@ -844,13 +913,13 @@ const splitSingleSectionByQuestions = (sectionText: string, targetBatchSize: num
         return batches;
     }
 
-    // Nếu văn bản dài mà không có đánh số rõ ràng (> 3500 ký tự), chia theo đoạn
-    if (text.length > 3500) {
+    // Nếu văn bản dài mà không có đánh số rõ ràng (> 4500 ký tự), chia theo đoạn
+    if (text.length > 4500) {
         const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
         const batches: string[] = [];
         let current = '';
         for (const p of paragraphs) {
-            if (current.length + p.length > 2500 && current.length > 0) {
+            if (current.length + p.length > 3000 && current.length > 0) {
                 batches.push(current);
                 current = p;
             } else {
@@ -866,7 +935,7 @@ const splitSingleSectionByQuestions = (sectionText: string, targetBatchSize: num
 
 export const parseQuestionsFromText = async (rawText: string): Promise<Question[]> => {
     const ai = getAIClient();
-    const batches = splitTextIntoBatches(rawText, 7);
+    const batches = splitTextIntoBatches(rawText, 14);
 
     // Schema chung cho từng lô bóc tách
     const batchSchema = {
@@ -900,47 +969,67 @@ export const parseQuestionsFromText = async (rawText: string): Promise<Question[
         }
     };
 
-    const processSingleBatch = async (batchText: string, batchIndex: number, totalBatches: number): Promise<any[]> => {
+    const processSingleBatchWithRetry = async (batchText: string, batchIndex: number, totalBatches: number): Promise<any[]> => {
         const prompt = `${EXTRACTION_INSTRUCTION}
 
 ${totalBatches > 1 ? `[ĐOẠN TRÍCH XUẤT ${batchIndex + 1}/${totalBatches}] - BẮT BUỘC TRÍCH XUẤT 100% TẤT CẢ CÁC CÂU HỎI TRONG ĐOẠN NÀY, KHÔNG ĐƯỢC BỎ SÓT CÂU NÀO:\n` : 'NỘI DUNG VĂN BẢN CẦN TRÍCH XUẤT VÀ PHÂN LOẠI MỨC ĐỘ:\n'}${batchText}`;
 
-        const response = await callAIWithFallback((model) => 
-            ai.models.generateContent({
-                model,
-                contents: prompt,
-                config: {
-                    responseMimeType: "application/json",
-                    maxOutputTokens: 8192,
-                    responseSchema: batchSchema
-                }
-            })
-        );
+        let lastErr: any = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                const response = await callAIWithFallback((model) => 
+                    ai.models.generateContent({
+                        model,
+                        contents: prompt,
+                        config: {
+                            responseMimeType: "application/json",
+                            maxOutputTokens: 8192,
+                            responseSchema: batchSchema
+                        }
+                    })
+                );
 
-        const textOutput = response.text || "[]";
-        return JSON.parse(cleanJsonString(textOutput));
+                const textOutput = response.text || "[]";
+                const parsed = safeJsonParse(textOutput, []);
+                return Array.isArray(parsed) ? parsed : [];
+            } catch (err: any) {
+                lastErr = err;
+                console.warn(`Lô ${batchIndex + 1} thử lần ${attempt} thất bại:`, err);
+                if (attempt < 2) {
+                    await new Promise(res => setTimeout(res, 800));
+                }
+            }
+        }
+        throw lastErr;
     };
 
     try {
         if (batches.length <= 1) {
-            const rawData = await processSingleBatch(batches[0] || rawText, 0, 1);
+            const rawData = await processSingleBatchWithRetry(batches[0] || rawText, 0, 1);
             return processAIQuestions(rawData);
         }
 
-        // Nếu có nhiều lô câu hỏi: Xử lý theo từng nhóm 2 lô để tốc độ nhanh và tránh rate limit
+        // Xử lý tuần tự có khoảng nghỉ 250ms để ngăn chặn triệt để 429 Rate Limit
         const allRawItems: any[] = [];
-        const CONCURRENT_LIMIT = 2;
-
-        for (let i = 0; i < batches.length; i += CONCURRENT_LIMIT) {
-            const slice = batches.slice(i, i + CONCURRENT_LIMIT);
-            const chunkResults = await Promise.all(
-                slice.map((batchText, idx) => processSingleBatch(batchText, i + idx, batches.length))
-            );
-            for (const res of chunkResults) {
+        for (let i = 0; i < batches.length; i++) {
+            if (i > 0) {
+                await new Promise(res => setTimeout(res, 250));
+            }
+            try {
+                const res = await processSingleBatchWithRetry(batches[i], i, batches.length);
                 if (Array.isArray(res)) {
                     allRawItems.push(...res);
                 }
+            } catch (batchErr: any) {
+                console.error(`Lỗi lô ${i + 1}/${batches.length}:`, batchErr);
+                if (allRawItems.length === 0 && i === batches.length - 1) {
+                    throw batchErr;
+                }
             }
+        }
+
+        if (allRawItems.length === 0) {
+            throw new Error("Không thể bóc tách câu hỏi từ văn bản. Vui lòng kiểm tra lại văn bản đầu vào.");
         }
 
         return processAIQuestions(allRawItems);
@@ -1018,7 +1107,7 @@ NHIỆM VỤ:
         );
 
         const textOutput = response.text || "[]";
-        const result = JSON.parse(cleanJsonString(textOutput));
+        const result = safeJsonParse(textOutput, []);
         return Array.isArray(result) ? result : [];
     };
 
@@ -1130,8 +1219,8 @@ ${jsonFormatDesc}`;
         );
 
         const textOutput = response.text || "[]";
-        const rawData = JSON.parse(cleanJsonString(textOutput));
-        const processed = processAIQuestions(rawData);
+        const rawData = safeJsonParse(textOutput, []);
+        const processed = processAIQuestions(Array.isArray(rawData) ? rawData : []);
         return processed.map(q => ({
             ...q,
             type: questionType,
@@ -1233,7 +1322,7 @@ TRẢ VỀ MẢNG JSON THUẦN TÚY:
         );
 
         const textOutput = response.text || "[]";
-        const result = JSON.parse(cleanJsonString(textOutput));
+        const result = safeJsonParse(textOutput, []);
         return Array.isArray(result) ? result.map((item: any) => ({
             id: item.id,
             level: normalizeLevel(item.level) || 'H',
