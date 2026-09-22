@@ -208,21 +208,21 @@
             
             let chunk = part;
             
-            // Nhận diện các lệnh LaTeX phổ biến (bắt đầu bằng \)
-            const latexPattern = /(?<!\\)(\\(?:frac\{[^{}]*\}\{[^{}]*\}|sqrt(?:\[[^{}]*\])?\{[^{}]*\}|vec\{[^{}]*\}|text\{[^{}]*\}|mathrm\{[^{}]*\}|mathbf\{[^{}]*\}|hat\{[^{}]*\}|bar\{[^{}]*\}|dot\{[^{}]*\}|ddot\{[^{}]*\}|left[([{|.]|right[)\]}|.]|alpha|beta|gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|Lambda|mu|nu|xi|Xi|pi|Pi|rho|sigma|Sigma|tau|upsilon|phi|Phi|chi|psi|Psi|omega|Omega|infty|approx|le|ge|neq|equiv|sim|times|div|cdot|pm|mp|circ|degree|rightarrow|to|parallel|perp|angle|sum|int|lim)(?:[a-zA-Z0-9_{}^=+\-*/(),.\s]*))/g;
+            // Nhận diện các lệnh LaTeX phổ biến (bắt đầu bằng \) - không dùng Lookbehind để tương thích 100% iOS Safari / iPhone
+            const latexPattern = /(^|[^\\])(\\(?:frac\{[^{}]*\}\{[^{}]*\}|sqrt(?:\[[^{}]*\])?\{[^{}]*\}|vec\{[^{}]*\}|text\{[^{}]*\}|mathrm\{[^{}]*\}|mathbf\{[^{}]*\}|hat\{[^{}]*\}|bar\{[^{}]*\}|dot\{[^{}]*\}|ddot\{[^{}]*\}|left[([{|.]|right[)\]}|.]|alpha|beta|gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|Lambda|mu|nu|xi|Xi|pi|Pi|rho|sigma|Sigma|tau|upsilon|phi|Phi|chi|psi|Psi|omega|Omega|infty|approx|le|ge|neq|equiv|sim|times|div|cdot|pm|mp|circ|degree|rightarrow|to|parallel|perp|angle|sum|int|lim)(?:[a-zA-Z0-9_{}^=+\-*/(),.\s]*))/g;
 
-            chunk = chunk.replace(latexPattern, (m) => {
-                const trimmed = m.trim();
-                if (!trimmed) return m;
-                return `$${trimmed}$`;
+            chunk = chunk.replace(latexPattern, (_m, prefix, cmd) => {
+                const trimmed = (cmd || '').trim();
+                if (!trimmed) return _m;
+                return `${prefix}$${trimmed}$`;
             });
 
             // Nhận diện số mũ hoặc chỉ số dưới chưa bọc LaTeX (ví dụ 10^-3, 10^5, x_1, v_{max})
-            const expPattern = /(?<=\s|^|[([=+\-*/])([a-zA-Z0-9]+\^\{?-?[0-9a-zA-Z+\-]+\}?|[a-zA-Z]+_\{?[0-9a-zA-Z+\-]+\}?)(?=\s|$|[)\].,;:!?])/g;
-            chunk = chunk.replace(expPattern, (m) => {
-                const trimmed = m.trim();
-                if (!trimmed || trimmed.startsWith('$')) return m;
-                return `$${trimmed}$`;
+            const expPattern = /(^|[\s([=+\-*/])([a-zA-Z0-9]+\^\{?-?[0-9a-zA-Z+\-]+\}?|[a-zA-Z]+_\{?[0-9a-zA-Z+\-]+\}?)(?=[\s)\].,;:!?]|$)/g;
+            chunk = chunk.replace(expPattern, (_m, prefix, expr) => {
+                const trimmed = (expr || '').trim();
+                if (!trimmed || trimmed.startsWith('$')) return _m;
+                return `${prefix}$${trimmed}$`;
             });
 
             return chunk;
