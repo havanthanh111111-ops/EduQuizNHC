@@ -921,7 +921,7 @@ export default function AdminDashboard() {
     }
   };
 
-  const handlePdfExtract = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePdfExtract = async (e: React.ChangeEvent<HTMLInputElement>, includeSolutions: boolean = true) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setIsAiLoading(true);
@@ -930,7 +930,7 @@ export default function AdminDashboard() {
       reader.onload = async () => {
         try {
           const base64 = (reader.result as string).split(',')[1];
-          const newQs = await parseQuestionsFromPDF(base64);
+          const newQs = await parseQuestionsFromPDF(base64, includeSolutions);
           setQuestions([...questions, ...newQs]);
         } catch (error: any) {
           alert("Lỗi bóc tách PDF: " + (error.message || 'Lỗi xử lý'));
@@ -942,11 +942,11 @@ export default function AdminDashboard() {
     } catch (error: any) { alert(error.message); setIsAiLoading(false); }
   };
 
-  const handleTextExtract = async (text: string) => {
+  const handleTextExtract = async (text: string, includeSolutions: boolean = true) => {
       if (!text.trim()) return;
       setIsAiLoading(true);
       try {
-          const newQs = await parseQuestionsFromText(text);
+          const newQs = await parseQuestionsFromText(text, includeSolutions);
           setQuestions([...questions, ...newQs]);
       } catch (error: any) {
           alert(error.message);
