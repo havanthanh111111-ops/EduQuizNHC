@@ -38,41 +38,110 @@ export const cleanJsonString = (str: string): string => {
 export const safeJsonParse = (str: string, fallback: any = []): any => {
     if (!str) return fallback;
     const cleaned = cleanJsonString(str);
+    
+    // 1. Thử parse trực tiếp
     try {
         return JSON.parse(cleaned);
-    } catch (primaryErr) {
-        // Cố gắng sửa lỗi JSON bị cắt đuôi (truncated array)
-        try {
-            if (cleaned.startsWith('[')) {
-                const lastBraceIdx = cleaned.lastIndexOf('}');
-                if (lastBraceIdx !== -1) {
-                    const repaired = cleaned.substring(0, lastBraceIdx + 1) + ']';
-                    return JSON.parse(repaired);
+    } catch (primaryErr) {}
+
+    // 2. Thử sửa lỗi Escape không hợp lệ (thường gặp trong công thức toán LaTeX \vec, \alpha, \frac...)
+    try {
+        // Thay thế các escape không hợp lệ (không phải \", \\, \/, \b, \f, \n, \r, \t, \uXXXX)
+        const sanitizedEscapes = cleaned.replace(/\\([^"\\\/bfnrtu]|u[0-9a-fA-F]{0,3}[^0-9a-fA-F])/g, (match, p1) => {
+            return '\\\\' + p1;
+        });
+        return JSON.parse(sanitizedEscapes);
+    } catch (escapeErr) {}
+
+    // 3. Sửa lỗi mảng JSON bị cắt ngang (Truncated JSON / Unterminated string ở cuối)
+    try {
+        if (cleaned.startsWith('[')) {
+            // Tìm dấu đóng ngoặc nhọn '}' cuối cùng của object hoàn chỉnh
+            let lastValidBrace = -1;
+            let inString = false;
+            let isEscaped = false;
+
+            for (let i = 0; i < cleaned.length; i++) {
+                const char = cleaned[i];
+                if (isEscaped) {
+                    isEscaped = false;
+                    continue;
                 }
-            } else if (cleaned.startsWith('{')) {
-                const repaired = cleaned + '}';
+                if (char === '\\') {
+                    isEscaped = true;
+                    continue;
+                }
+                if (char === '"') {
+                    inString = !inString;
+                    continue;
+                }
+                if (!inString && char === '}') {
+                    lastValidBrace = i;
+                }
+            }
+
+            if (lastValidBrace !== -1) {
+                const repaired = cleaned.substring(0, lastValidBrace + 1) + ']';
                 return JSON.parse(repaired);
             }
-        } catch (repairErr) {}
+        } else if (cleaned.startsWith('{')) {
+            const repaired = cleaned.replace(/,\s*$/, '') + '}';
+            return JSON.parse(repaired);
+        }
+    } catch (repairErr) {}
 
-        // Fallback: Trích xuất từng object câu hỏi riêng biệt bằng regex
-        try {
-            const objectRegex = /\{[\s\S]*?\}(?=\s*(?:,|\s*\]|$))/g;
-            const matches = cleaned.match(objectRegex);
-            if (matches && matches.length > 0) {
-                const extracted: any[] = [];
-                for (const m of matches) {
-                    try {
-                        extracted.push(JSON.parse(m));
-                    } catch {}
-                }
-                if (extracted.length > 0) return extracted;
+    // 4. Fallback trích xuất từng object câu hỏi riêng lẻ { ... } bằng thuật toán quét token
+    try {
+        const extracted: any[] = [];
+        let depth = 0;
+        let startIdx = -1;
+        let inString = false;
+        let isEscaped = false;
+
+        for (let i = 0; i < cleaned.length; i++) {
+            const char = cleaned[i];
+            if (isEscaped) {
+                isEscaped = false;
+                continue;
             }
-        } catch {}
+            if (char === '\\') {
+                isEscaped = true;
+                continue;
+            }
+            if (char === '"') {
+                inString = !inString;
+                continue;
+            }
+            if (!inString) {
+                if (char === '{') {
+                    if (depth === 0) startIdx = i;
+                    depth++;
+                } else if (char === '}') {
+                    depth--;
+                    if (depth === 0 && startIdx !== -1) {
+                        const objStr = cleaned.substring(startIdx, i + 1);
+                        try {
+                            extracted.push(JSON.parse(objStr));
+                        } catch {
+                            // Thử sanitize escapes cho từng object
+                            try {
+                                const sanitized = objStr.replace(/\\([^"\\\/bfnrtu]|u[0-9a-fA-F]{0,3}[^0-9a-fA-F])/g, '\\\\$1');
+                                extracted.push(JSON.parse(sanitized));
+                            } catch {}
+                        }
+                        startIdx = -1;
+                    }
+                }
+            }
+        }
 
-        console.warn("Không thể parse JSON tự động, trả về fallback:", primaryErr);
-        return fallback;
-    }
+        if (extracted.length > 0) {
+            return extracted;
+        }
+    } catch (tokenErr) {}
+
+    console.warn("safeJsonParse: Không thể khôi phục JSON, trả về fallback");
+    return fallback;
 };
 
 const removeVietnameseAccents = (str: string): string => {
@@ -564,9 +633,9 @@ QUY TẮC KỸ THUẬT BẮT BUỘC:
         );
 
         const textOutput = response.text || "[]";
-        const rawData = JSON.parse(cleanJsonString(textOutput));
+        const rawData = safeJsonParse(textOutput, []);
         
-        return processAIQuestions(rawData);
+        return processAIQuestions(Array.isArray(rawData) ? rawData : []);
     } catch (error: any) {
         throw new Error("AI không thể tạo đề: " + formatAIError(error));
     }
