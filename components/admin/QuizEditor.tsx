@@ -66,8 +66,8 @@ interface QuizEditorProps {
     onOpenBank: (type: QuestionType) => void;
     orderIndex: number;
     setOrderIndex: React.Dispatch<React.SetStateAction<number>> | ((val: number) => void);
-    onPdfExtract: (e: React.ChangeEvent<HTMLInputElement>) => void;
-    onTextExtract: (text: string) => void;
+    onPdfExtract: (e: React.ChangeEvent<HTMLInputElement>, includeSolutions?: boolean) => void;
+    onTextExtract: (text: string, includeSolutions?: boolean) => void;
     onUploadImage: (qId: string, file: File) => void;
     uploadingId: string | null;
     isAiLoading?: boolean;
@@ -704,6 +704,7 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
 
 export default function QuizEditor(props: QuizEditorProps) {
     const [isTextInputOpen, setIsTextInputOpen] = useState(false);
+    const [extractMode, setExtractMode] = useState<'fast' | 'full'>('fast');
     const [pastedText, setPastedText] = useState('');
     const [isGalleryOpen, setIsGalleryOpen] = useState(false);
     const [galleryTargetQId, setGalleryTargetQId] = useState<string | null>(null);
@@ -1078,7 +1079,7 @@ export default function QuizEditor(props: QuizEditorProps) {
                 console.warn("Thử parse JSON thất bại, tiếp tục bóc tách qua AI:", jsonErr);
             }
         }
-        props.onTextExtract(pastedText);
+        props.onTextExtract(pastedText, extractMode === 'full');
         setPastedText('');
         setIsTextInputOpen(false);
     };
@@ -1123,8 +1124,8 @@ export default function QuizEditor(props: QuizEditorProps) {
                         alert("Không thể đọc được văn bản trong file Word này. Vui lòng kiểm tra lại nội dung file.");
                         return;
                     }
-                    // Tự động chuyển văn bản vừa trích xuất từ DOCX cho AI bóc tách
-                    props.onTextExtract(extractedText);
+                    // Tự động chuyển văn bản vừa trích xuất từ DOCX cho AI bóc tách theo chế độ đã chọn
+                    props.onTextExtract(extractedText, extractMode === 'full');
                 } catch (err: any) {
                     alert("Lỗi khi đọc file Word (.docx): " + (err.message || "Định dạng không được hỗ trợ"));
                 }
@@ -1193,12 +1194,56 @@ export default function QuizEditor(props: QuizEditorProps) {
                             </div>
                             <button onClick={() => setIsTextInputOpen(false)} className="p-3 hover:bg-red-600 rounded-xl transition-colors"><X/></button>
                         </div>
-                        <div className="p-8 space-y-6">
+                        <div className="p-8 space-y-5">
                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-relaxed">
                                 Copy nội dung đề từ Word/Web dán vào đây (Nếu dán chuỗi JSON hệ thống sẽ tự động tách câu hỏi 0% AI, nếu dán văn bản thường AI sẽ bóc tách).
                             </p>
+
+                            {/* Tùy chọn 2 chế độ bóc tách */}
+                            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">
+                                    Chọn chế độ bóc tách của AI:
+                                </label>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => setExtractMode('fast')}
+                                        className={`flex items-start gap-3 p-3.5 rounded-xl border-2 text-left transition-all ${extractMode === 'fast' ? 'bg-amber-50/80 border-amber-500 text-amber-950 shadow-xs ring-2 ring-amber-200' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                                    >
+                                        <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${extractMode === 'fast' ? 'border-amber-600 bg-amber-600' : 'border-slate-300'}`}>
+                                            {extractMode === 'fast' && <div className="w-1.5 h-1.5 rounded-full bg-white"></div>}
+                                        </div>
+                                        <div>
+                                            <div className="text-xs font-black uppercase flex items-center gap-1.5">
+                                                <Zap size={14} className="text-amber-500"/> 1. Chỉ điền đáp án (Siêu tốc & Ổn định)
+                                            </div>
+                                            <div className="text-[10px] text-slate-500 font-medium mt-1 leading-snug">
+                                                Không giải chi tiết. Tốc độ vượt trội, bóc tách đầy đủ 100% tất cả các câu từ đầu đến cuối đề, không lo quá tải token.
+                                            </div>
+                                        </div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setExtractMode('full')}
+                                        className={`flex items-start gap-3 p-3.5 rounded-xl border-2 text-left transition-all ${extractMode === 'full' ? 'bg-blue-50/80 border-blue-500 text-blue-950 shadow-xs ring-2 ring-blue-200' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                                    >
+                                        <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${extractMode === 'full' ? 'border-blue-600 bg-blue-600' : 'border-slate-300'}`}>
+                                            {extractMode === 'full' && <div className="w-1.5 h-1.5 rounded-full bg-white"></div>}
+                                        </div>
+                                        <div>
+                                            <div className="text-xs font-black uppercase flex items-center gap-1.5">
+                                                <Sparkles size={14} className="text-blue-500"/> 2. Có giải chi tiết
+                                            </div>
+                                            <div className="text-[10px] text-slate-500 font-medium mt-1 leading-snug">
+                                                Bóc tách câu hỏi, đáp án và viết kèm lời giải chi tiết sư phạm cho từng câu.
+                                            </div>
+                                        </div>
+                                    </button>
+                                </div>
+                            </div>
+
                             <textarea 
-                                className="w-full h-80 p-6 bg-slate-50 border-2 border-slate-100 rounded-[2rem] outline-none font-medium text-sm focus:border-blue-400 transition-all"
+                                className="w-full h-72 p-6 bg-slate-50 border-2 border-slate-100 rounded-[2rem] outline-none font-medium text-sm focus:border-blue-400 transition-all"
                                 placeholder="Dán nội dung văn bản hoặc chuỗi JSON tại đây..."
                                 value={pastedText}
                                 onChange={e => setPastedText(e.target.value)}
@@ -1256,13 +1301,49 @@ export default function QuizEditor(props: QuizEditorProps) {
                 </div>
                 
                 {/* THANH CÔNG CỤ: KHO ẢNH, HỖ TRỢ LATEX & BÓC TÁCH NHẬP ĐỀ */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b-2 border-slate-100 pb-5 pt-2">
-                    <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                            Công cụ nhập liệu & Hỗ trợ:
-                        </span>
+                <div className="flex flex-col gap-4 border-b-2 border-slate-100 pb-6 pt-2">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                Công cụ nhập liệu & Hỗ trợ:
+                            </span>
+                        </div>
+
+                        {/* THANH CHỌN 2 CHẾ ĐỘ BÓC TÁCH AI */}
+                        <div className="flex flex-wrap items-center gap-1.5 bg-slate-100/80 p-1 rounded-2xl border border-slate-200/90 shadow-2xs">
+                            <span className="text-[10px] font-black uppercase text-slate-500 px-2 flex items-center gap-1">
+                                <Sparkles size={12} className="text-amber-500"/> Chế độ AI bóc tách:
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setExtractMode('fast')}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all shadow-2xs ${
+                                    extractMode === 'fast'
+                                        ? 'bg-amber-500 text-white shadow-sm ring-2 ring-amber-300'
+                                        : 'bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                                title="Bóc tách câu hỏi và điền đáp án đúng, KHÔNG giải chi tiết. Khuyên dùng cho đề 28-50 câu, siêu tốc, bóc tách đủ 100% không lo lỗi/ngắt chuỗi"
+                            >
+                                <Zap size={13} className={extractMode === 'fast' ? 'text-white' : 'text-amber-500'} />
+                                <span>1. Chỉ điền đáp án (Siêu tốc & Ổn định)</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setExtractMode('full')}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all shadow-2xs ${
+                                    extractMode === 'full'
+                                        ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-300'
+                                        : 'bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                                title="Bóc tách câu hỏi, đáp án và viết lời giải chi tiết sư phạm cho từng câu"
+                            >
+                                <Sparkles size={13} className={extractMode === 'full' ? 'text-white' : 'text-blue-500'} />
+                                <span>2. Có giải chi tiết</span>
+                            </button>
+                        </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-1.5">
+
+                    <div className="flex flex-wrap items-center gap-1.5 justify-start lg:justify-end">
                         {/* Nút mở Cấu hình Lưu trữ Ảnh (ImgBB / Supabase) */}
                         <button
                             type="button"
@@ -1328,15 +1409,16 @@ export default function QuizEditor(props: QuizEditorProps) {
                         <button 
                             onClick={() => setIsTextInputOpen(true)}
                             className={`flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-black transition-all shadow-xs active:scale-95 whitespace-nowrap ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            title={`Nhập văn bản với AI (Chế độ hiện tại: ${extractMode === 'fast' ? 'Chỉ đáp án' : 'Có lời giải'})`}
                         >
-                            <TypeIcon size={13}/> Nhập văn bản (AI)
+                            <TypeIcon size={13}/> Nhập văn bản ({extractMode === 'fast' ? '⚡ Chỉ Đ/A' : '✨ Có giải'})
                         </button>
-                        <label className={`flex items-center gap-1.5 px-3 py-2 bg-blue-700 text-white rounded-xl text-[10px] font-black uppercase cursor-pointer hover:bg-blue-800 transition-all shadow-xs active:scale-95 whitespace-nowrap ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`} title="Nhập trực tiếp từ file Word (.docx)">
-                            <FileText size={13}/> Nhập DOCX (AI)
+                        <label className={`flex items-center gap-1.5 px-3 py-2 bg-blue-700 text-white rounded-xl text-[10px] font-black uppercase cursor-pointer hover:bg-blue-800 transition-all shadow-xs active:scale-95 whitespace-nowrap ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`} title={`Nhập file Word (.docx) với AI (Chế độ hiện tại: ${extractMode === 'fast' ? 'Chỉ đáp án' : 'Có lời giải'})`}>
+                            <FileText size={13}/> Nhập DOCX ({extractMode === 'fast' ? '⚡ Chỉ Đ/A' : '✨ Có giải'})
                             <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" disabled={props.isAiLoading} onChange={handleDocxFileSelect}/>
                         </label>
-                        <label className={`flex items-center gap-1.5 px-3 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase cursor-pointer hover:bg-black transition-all shadow-xs active:scale-95 whitespace-nowrap ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                            <FileUp size={13}/> Nhập PDF (AI)
+                        <label className={`flex items-center gap-1.5 px-3 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase cursor-pointer hover:bg-black transition-all shadow-xs active:scale-95 whitespace-nowrap ${props.isAiLoading ? 'opacity-50 cursor-not-allowed' : ''}`} title={`Nhập file PDF với AI (Chế độ hiện tại: ${extractMode === 'fast' ? 'Chỉ đáp án' : 'Có lời giải'})`}>
+                            <FileUp size={13}/> Nhập PDF ({extractMode === 'fast' ? '⚡ Chỉ Đ/A' : '✨ Có giải'})
                             <input 
                                 type="file" 
                                 accept="application/pdf" 
@@ -1345,7 +1427,7 @@ export default function QuizEditor(props: QuizEditorProps) {
                                 onChange={(e) => {
                                     const file = e.target.files?.[0];
                                     if (file) setCurrentPdfFile(file);
-                                    props.onPdfExtract(e);
+                                    props.onPdfExtract(e, extractMode === 'full');
                                 }}
                             />
                         </label>
