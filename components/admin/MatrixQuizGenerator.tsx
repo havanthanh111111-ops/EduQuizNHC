@@ -14,7 +14,7 @@ interface MatrixQuizGeneratorProps {
     chapters: Chapter[];
     bankQuestions: Question[];
     isBankLoading?: boolean;
-    onLoadBank?: () => Promise<void>;
+    onLoadBank?: (grade?: Grade | 'all') => Promise<void> | void;
     onGenerateSuccess: (
         createdQuestions: Question[], 
         quizTitle: string, 
@@ -87,6 +87,42 @@ const normalizeLevel = (lvl: any): 'B' | 'H' | 'VD' | 'VDC' | '' => {
     if (s === 'VD' || s === 'HARD' || s === 'VẬN DỤNG') return 'VD';
     if (s === 'VDC' || s === 'VHARD' || s === 'VẬN DỤNG CAO') return 'VDC';
     return '';
+};
+
+// Nhận diện mức độ thực tế của câu hỏi (nếu trong CSDL chưa gán level)
+export const getEffectiveQuestionLevel = (q: Question): 'B' | 'H' | 'VD' | 'VDC' => {
+    const raw = normalizeLevel(q.level);
+    if (raw) return raw;
+
+    const text = ((q.text || '') + ' ' + (q.solution || '')).toLowerCase();
+    const type = normalizeQuestionType(q.type);
+
+    const hasNumbers = /\d+([,.]\d+)?\s*(m|cm|mm|kg|g|s|hz|v|a|w|j|n|t|wb|k|°c|pa|atm|mol|mev|ev|u)\b/i.test(text);
+    const hasEquations = /(\$|\=|\+|\-|\*|\/|\^|\_)/.test(text);
+    const isCalculation = hasNumbers && hasEquations;
+
+    if (type === 'short') {
+        return isCalculation ? 'VD' : 'H';
+    }
+
+    if (type === 'group-tf') {
+        return isCalculation ? 'VD' : 'H';
+    }
+
+    // MCQ
+    if (isCalculation) {
+        const numbersCount = (text.match(/\d+([,.]\d+)?/g) || []).length;
+        if (numbersCount >= 4 || /đồ thị|bảng biến thiên|cực đại|cực tiểu|giá trị lớn nhất|hệ số công suất/i.test(text)) {
+            return 'VDC';
+        }
+        return 'VD';
+    }
+
+    if (/khái niệm|định nghĩa|đơn vị|công thức nào sau đây|ký hiệu|phát biểu nào sau đây đúng|đặc điểm nào/i.test(text)) {
+        return 'B';
+    }
+
+    return 'H';
 };
 
 // Chuẩn hóa dạng câu hỏi
@@ -189,31 +225,31 @@ export const STANDARD_CHAPTERS: Record<Grade, { id: string; name: string; grade:
 };
 
 // Nhận diện số chương từ nội dung câu hỏi Vật lí
-const getInferredChapterNumber = (q: Question, grade: Grade): number => {
+export const getInferredChapterNumber = (q: Question, grade: Grade): number => {
     const combinedText = `${q.chapterName || ''} ${q.quizCategory || ''} ${q.text || ''} ${q.solution || ''} ${Array.isArray(q.options) ? q.options.join(' ') : ''}`.toLowerCase();
 
     if (String(grade) === '12') {
         // Chương 1: Vật lí nhiệt
         if (
-            /nhi[eệ]t\s*[đd][oộ]|nhi[eệ]t\s*dung|n[oó]ng\s*ch[aả]y|h[oó]a\s*h[oơ]i|nhi[eệ]t\s*l[ư][ợ]ng|n[oộ]i\s*n[aă]ng|kelvin|celsius|nhi[eệ]t\s*k[eế]|truy[eề]n\s*nhi[eệ]t|s[oô]i|bay\s*h[oơ]i|[đd][oộ]\s*c\b|cal\b|joule|nhi[eệ]t\s*n[oó]ng|chuy[eể]n\s*th[eể]|n[oó]ng\s*ch[aả]y\s*ri[eê]ng|h[oó]a\s*h[oơ]i\s*ri[eê]ng/i.test(combinedText)
+            /nhi[eệ]t\s*[đd][oộ]|nhi[eệ]t\s*dung|n[oó]ng\s*ch[aả]y|h[oó]a\s*h[oơ]i|nhi[eệ]t\s*l[ư][ợ]ng|n[oộ]i\s*n[aă]ng|kelvin|celsius|nhi[eệ]t\s*k[eế]|truy[eề]n\s*nhi[eệ]t|s[oô]i|bay\s*h[oơ]i|[đd][oộ]\s*c\b|cal\b|joule|nhi[eệ]t\s*n[oó]ng|chuy[eể]n\s*th[eể]|n[oó]ng\s*ch[aả]y\s*ri[eê]ng|h[oó]a\s*h[oơ]i\s*ri[eê]ng|nhi[eệ]t\s*giai|nhi[eệ]t\s*[đd][oộ]\s*tuy[eệ]t\s*[đd][oố]i|nhi[eệ]t\s*l[ư][ợ]ng\s*to[aả]|nhi[eệ]t\s*l[ư][ợ]ng\s*thu/i.test(combinedText)
         ) {
             return 1;
         }
         // Chương 2: Khí lí tưởng / Vật lý chất khí
         if (
-            /kh[ií]\s*l[yýí]\s*t[uư][ở]ng|ch[aấ]t\s*kh[ií]|[đd][aẳ]ng\s*nhi[eệ]t|[đd][aẳ]ng\s*t[ií]ch|[đd][aẳ]ng\s*[aá]p|boyle|bo-i-l[oơ]|charles|s[aá]c-l[oơ]|clapeyron|[aá]p\s*su[aấ]t|mol\s*kh[ií]|avogadro|ph[aâ]n\s*t[ử]\s*kh[ií]|b[iì]nh\s*k[ií]n|p1v1|h[aă]ng\s*s[oố]\s*kh[ií]|[đd][oộ]ng\s*h[oọ]c\s*ph[aâ]n\s*t[ử]|[đd][oộ]\s*kh[oô]ng\s*tuy[eệ]t|[aá]p\s*k[eế]/i.test(combinedText)
+            /kh[ií]\s*l[yýí]\s*t[uư][ở]ng|ch[aấ]t\s*kh[ií]|[đd][aẳ]ng\s*nhi[eệ]t|[đd][aẳ]ng\s*t[ií]ch|[đd][aẳ]ng\s*[aá]p|boyle|bo-i-l[oơ]|charles|s[aá]c-l[oơ]|clapeyron|[aá]p\s*su[aấ]t|mol\s*kh[ií]|avogadro|ph[aâ]n\s*t[ử]\s*kh[ií]|b[iì]nh\s*k[ií]n|p1v1|h[aă]ng\s*s[oố]\s*kh[ií]|[đd][oộ]ng\s*h[oọ]c\s*ph[aâ]n\s*t[ử]|[đd][oộ]\s*kh[oô]ng\s*tuy[eệ]t|[aá]p\s*k[eế]|\bmol\b|kh[ií]\s*th[ự]c|ph[ư][ơng]\s*tr[iì]nh\s*tr[aạ]ng\s*th[aái]/i.test(combinedText)
         ) {
             return 2;
         }
         // Chương 3: Từ trường
         if (
-            /t[uừ]\s*tr[uư][oờ]ng|l[ự]c\s*t[uừ]|c[aả]m\s*[ứ]ng\s*t[uừ]|lorentz|lo-ren-x[oơ]|t[uừ]\s*th[oô]ng|c[aả]m\s*[ứ]ng\s*[đd]i[eệ]n\s*t[uừ]|su[aấ]t\s*[đd]i[eệ]n\s*[đd][oộ]ng\s*c[aả]m\s*[ứ]ng|faraday|fara-[đd][aâ]y|lenz|len-x[oơ]|tesla|weber|nam\s*ch[aâ]m|cu[oộ]n\s*d[aâ]y|[oố]ng\s*d[aâ]y|foucault|fu-c[oô]|t[uừ]\s*ph[oổ]|n[aắ]m\s*tay\s*ph[aả]i|b[aà]n\s*tay\s*tr[aá]i/i.test(combinedText)
+            /t[uừ]\s*tr[uư][oờ]ng|l[ự]c\s*t[uừ]|c[aả]m\s*[ứ]ng\s*t[uừ]|lorentz|lo-ren-x[oơ]|t[uừ]\s*th[oô]ng|c[aả]m\s*[ứ]ng\s*[đd]i[eệ]n\s*t[uừ]|su[aấ]t\s*[đd]i[eệ]n\s*[đd][oộ]ng\s*c[aả]m\s*[ứ]ng|faraday|fara-[đd][aâ]y|lenz|len-x[oơ]|tesla|weber|nam\s*ch[aâ]m|cu[oộ]n\s*d[aâ]y|[oố]ng\s*d[aâ]y|foucault|fu-c[oô]|t[uừ]\s*ph[oổ]|n[aắ]m\s*tay\s*ph[aả]i|b[aà]n\s*tay\s*tr[aá]i|d[aâ]y\s*d[a\~]n\s*th[a8]ng|v[oò]ng\s*d[aâ]y|v[oò]ng\s*tr[oò]n|d[oò]ng\s*[đd]i[eệ]n\s*ch[aạ]y\s*qua|t[aâ]m\s*c[ủủa]*\s*v[oò]ng|thanh\s*(nh[oô]m|kim\s*lo[aạ]i|d[a\~]n\s*[đd]i[eệ]n)|cyclotron|quang\s*ph[oổ]\s*kh[oố]i/i.test(combinedText)
         ) {
             return 3;
         }
         // Chương 4: Hạt nhân nguyên tử / Vật lý hạt nhân
         if (
-            /h[aạ]t\s*nh[aâ]n|proton|pr[oô]t[oô]n|neutron|n[oơ]tr[oô]n|nuclon|nucl[oô]n|nucl[eê][oô]n|ph[oó]ng\s*x[aạ]|chu\s*k[yỳi]\s*b[aá]n\s*r[a\~]|n[aă]ng\s*l[ư][ợ]ng\s*li[eê]n\s*k[eế]t|[đd][oộ]\s*h[uụ]t\s*kh[oố]i|alpha|beta|gamma|ph[aâ]n\s*h[aạ]ch|nhi[eệ]t\s*h[aạ]ch|ph[aả]n\s*[ứ]ng\s*h[aạ]t\s*nh[aâ]n|[đd][oồ]ng\s*v[iị]|mev|đơn vị u\b|tia\s*ph[oó]ng\s*x[aạ]/i.test(combinedText)
+            /h[aạ]t\s*nh[aâ]n|proton|pr[oô]t[oô]n|neutron|n[oơ]tr[oô]n|nuclon|nucl[oô]n|nucl[eê][oô]n|ph[oó]ng\s*x[aạ]|chu\s*k[yỳi]\s*b[aá]n\s*r[a\~]|n[aă]ng\s*l[ư][ợ]ng\s*li[eê]n\s*k[eế]t|[đd][oộ]\s*h[uụ]t\s*kh[oố]i|alpha|beta|gamma|ph[aâ]n\s*h[aạ]ch|nhi[eệ]t\s*h[aạ]ch|ph[aả]n\s*[ứ]ng\s*h[aạ]t\s*nh[aâ]n|[đd][oồ]ng\s*v[iị]|mev|đơn vị u\b|tia\s*ph[oó]ng\s*x[aạ]|h[aạ]t\s*nh[aâ]n\s*(con|m[eẹ])|tia\s*(an-pha|b[eê]-ta|gam-ma)|b[ả]o\s*to[aà]n\s*s[oố]\s*kh[oố]i/i.test(combinedText)
         ) {
             return 4;
         }
@@ -261,7 +297,7 @@ const getInferredChapterNumber = (q: Question, grade: Grade): number => {
 };
 
 // Kiểm tra câu hỏi có khớp với chương
-const matchQuestionChapter = (
+export const matchQuestionChapter = (
     q: Question, 
     chId: string, 
     chName: string, 
@@ -326,12 +362,12 @@ export default function MatrixQuizGenerator({
     hasQuestionsInEditor,
     onCancel
 }: MatrixQuizGeneratorProps) {
-    // Tự động tải ngân hàng nếu chưa có dữ liệu
+    // Tự động tải ngân hàng khi khối thay đổi hoặc chưa có dữ liệu
     useEffect(() => {
-        if (bankQuestions.length === 0 && onLoadBank) {
-            onLoadBank();
+        if (onLoadBank) {
+            onLoadBank(grade);
         }
-    }, [bankQuestions.length, onLoadBank]);
+    }, [grade, onLoadBank]);
 
     const [quizTitle, setQuizTitle] = useState(`ĐỀ KIỂM TRA MA TRẬN VẬT LÝ ${grade}`);
     const [durationMinutes, setDurationMinutes] = useState(50);
@@ -381,7 +417,7 @@ export default function MatrixQuizGenerator({
             if (matchedDb) {
                 finalChapters.push({
                     id: matchedDb.id,
-                    name: matchedDb.name,
+                    name: sc.name, // Giữ tên chuẩn sạch đẹp chuẩn bộ
                     grade: grade,
                     order: targetNum
                 });
@@ -392,6 +428,11 @@ export default function MatrixQuizGenerator({
                 });
             }
         });
+
+        // Đối với khối 12: Tuyệt đối CHỈ xuất hiện 4 chương chính quy, loại bỏ toàn bộ đề ôn, KTTX, LTĐH
+        if (String(grade) === '12') {
+            return finalChapters;
+        }
 
         // Bổ sung các chương hợp lệ khác trong DB nếu có và chưa xuất hiện
         validDbChapters.forEach(c => {
@@ -428,8 +469,8 @@ export default function MatrixQuizGenerator({
         });
 
         bankQuestions.forEach(q => {
-            const qGrade = String(q.quizGrade || (q as any).grade || '12');
-            if (qGrade !== String(grade) && qGrade !== 'all') return;
+            const qGrade = String(q.quizGrade || (q as any).grade || '');
+            if (qGrade && qGrade !== String(grade) && qGrade !== 'all') return;
 
             const qType = normalizeQuestionType(q.type);
             typeTotals[qType] = (typeTotals[qType] || 0) + 1;
@@ -439,11 +480,11 @@ export default function MatrixQuizGenerator({
                     chapterTotals[ch.id] = (chapterTotals[ch.id] || 0) + 1;
                     const key = `${ch.id}__${qType}`;
                     if (statsByKey[key]) {
-                        const normLvl = normalizeLevel(q.level);
-                        if (normLvl === 'B') statsByKey[key].b++;
-                        else if (normLvl === 'H') statsByKey[key].h++;
-                        else if (normLvl === 'VD') statsByKey[key].vd++;
-                        else if (normLvl === 'VDC') statsByKey[key].vdc++;
+                        const effectiveLvl = getEffectiveQuestionLevel(q);
+                        if (effectiveLvl === 'B') statsByKey[key].b++;
+                        else if (effectiveLvl === 'H') statsByKey[key].h++;
+                        else if (effectiveLvl === 'VD') statsByKey[key].vd++;
+                        else if (effectiveLvl === 'VDC') statsByKey[key].vdc++;
                         
                         statsByKey[key].total++;
                         statsByKey[key].questions.push(q);
@@ -630,8 +671,9 @@ export default function MatrixQuizGenerator({
                     const pickLevel = (levelKey: 'B' | 'H' | 'VD' | 'VDC', requestedCount: number) => {
                         if (requestedCount <= 0) return;
                         
+                        // Bước 1: Ưu tiên câu có mức độ khớp chính xác hoặc qua nhận diện mức độ thông minh
                         const matched = candidatesPool.filter(q => {
-                            return normalizeLevel(q.level) === levelKey && !existingQuestionTexts.has((q.text || '').trim());
+                            return getEffectiveQuestionLevel(q) === levelKey && !existingQuestionTexts.has((q.text || '').trim());
                         });
 
                         const shuffled = shuffleArray(matched);
@@ -649,7 +691,35 @@ export default function MatrixQuizGenerator({
                             });
                         });
 
-                        const diff = requestedCount - picked.length;
+                        let diff = requestedCount - picked.length;
+
+                        // Bước 2: TẬN DỤNG TỐI ĐA KHO CSDL CỦA GIÁO VIÊN
+                        // Nếu thiếu câu đúng mức độ này nhưng trong CSDL cùng chương & dạng câu vẫn còn câu hỏi chưa chọn:
+                        // Lấy ngay từ kho CSDL có sẵn thay vì báo thiếu / gọi AI soạn bù!
+                        if (diff > 0) {
+                            const fallbackCandidates = candidatesPool.filter(q => {
+                                return !existingQuestionTexts.has((q.text || '').trim());
+                            });
+
+                            const shuffledFallback = shuffleArray(fallbackCandidates);
+                            const pickedFallback = shuffledFallback.slice(0, diff);
+
+                            pickedFallback.forEach((q: Question) => {
+                                existingQuestionTexts.add((q.text || '').trim());
+                                finalQuestions.push({
+                                    ...q,
+                                    id: uuidv4(),
+                                    type: t.id,
+                                    chapterName: ch.name,
+                                    chapterId: ch.id,
+                                    level: levelKey
+                                });
+                            });
+
+                            diff -= pickedFallback.length;
+                        }
+
+                        // Chỉ khi kho CSDL thực sự hết sạch câu hỏi của dạng này trong chương này thì mới tính là shortfall
                         if (diff > 0) {
                             shortfalls.push({
                                 chapterName: ch.name,
@@ -668,29 +738,35 @@ export default function MatrixQuizGenerator({
             });
 
             // 2. Nếu thiếu câu hỏi và bật tính năng AI bù câu
-            if (shortfalls.length > 0 && allowAiFallback) {
-                const totalMissing = shortfalls.reduce((acc, s) => acc + s.needed, 0);
-                setGenerationProgress(`Ngân hàng thiếu ${totalMissing} câu. AI đang tạo bổ sung đúng dạng câu còn thiếu...`);
+            if (shortfalls.length > 0) {
+                if (allowAiFallback) {
+                    const totalMissing = shortfalls.reduce((acc, s) => acc + s.needed, 0);
+                    setGenerationProgress(`Đã lấy ${finalQuestions.length} câu từ CSDL. Đang nhờ AI tạo bổ sung ${totalMissing} câu còn thiếu...`);
 
-                for (const shortfall of shortfalls) {
-                    const typeLabel = shortfall.type === 'mcq' ? 'Trắc nghiệm' : shortfall.type === 'group-tf' ? 'Đúng/Sai' : 'Trả lời ngắn';
-                    const levelLabel = shortfall.level === 'B' ? 'Nhận biết' : shortfall.level === 'H' ? 'Thông hiểu' : shortfall.level === 'VD' ? 'Vận dụng' : 'VDC';
-                    
-                    setGenerationProgress(`AI đang soạn bù ${shortfall.needed} câu [${typeLabel} - ${levelLabel}] cho "${shortfall.chapterName}"...`);
-                    
-                    const aiCreated = await generateMissingQuestionsForChapter(
-                        String(grade),
-                        shortfall.chapterName,
-                        shortfall.level,
-                        shortfall.needed,
-                        Array.from(existingQuestionTexts),
-                        shortfall.type
-                    );
+                    try {
+                        for (const shortfall of shortfalls) {
+                            const typeLabel = shortfall.type === 'mcq' ? 'Trắc nghiệm' : shortfall.type === 'group-tf' ? 'Đúng/Sai' : 'Trả lời ngắn';
+                            const levelLabel = shortfall.level === 'B' ? 'Nhận biết' : shortfall.level === 'H' ? 'Thông hiểu' : shortfall.level === 'VD' ? 'Vận dụng' : 'VDC';
+                            
+                            setGenerationProgress(`AI đang soạn bù ${shortfall.needed} câu [${typeLabel} - ${levelLabel}] cho "${shortfall.chapterName}"...`);
+                            
+                            const aiCreated = await generateMissingQuestionsForChapter(
+                                String(grade),
+                                shortfall.chapterName,
+                                shortfall.level,
+                                shortfall.needed,
+                                Array.from(existingQuestionTexts),
+                                shortfall.type
+                            );
 
-                    aiCreated.forEach((q: Question) => {
-                        existingQuestionTexts.add((q.text || '').trim());
-                        finalQuestions.push(q);
-                    });
+                            aiCreated.forEach((q: Question) => {
+                                existingQuestionTexts.add((q.text || '').trim());
+                                finalQuestions.push(q);
+                            });
+                        }
+                    } catch (aiErr) {
+                        console.warn("Lỗi khi AI soạn bù câu, tiếp tục với câu hỏi đã lấy từ CSDL:", aiErr);
+                    }
                 }
             }
 
@@ -753,6 +829,14 @@ export default function MatrixQuizGenerator({
                     points: pts
                 };
             });
+
+            if (balancedQuestions.length === 0) {
+                setStatusMessage({
+                    type: 'error',
+                    text: 'Không tìm thấy câu hỏi phù hợp trong CSDL và không thể tạo đề. Vui lòng kiểm tra lại ma trận số lượng câu!'
+                });
+                return;
+            }
 
             // Hoàn tất
             onGenerateSuccess(balancedQuestions, quizTitle, target, durationMinutes, editorAction);
