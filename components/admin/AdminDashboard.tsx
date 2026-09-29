@@ -487,25 +487,51 @@ export default function AdminDashboard() {
 
   const loadBankDataIfNeeded = useCallback(async (grade?: Grade | 'all', forceRefresh: boolean = false) => {
     if (!isDatabaseConnected()) return;
-    const targetGrade = grade || (bGradeFilter !== 'all' ? bGradeFilter : '10');
+    const targetGrade = grade || quizGrade || (bGradeFilter !== 'all' ? bGradeFilter : 'all');
     setIsBankLoading(true);
     try {
       const [b, c] = await Promise.all([
-        getBankQuestions(targetGrade, forceRefresh),
+        getBankQuestions(targetGrade === 'all' ? 'all' : targetGrade, forceRefresh),
         getChapters(forceRefresh)
       ]);
-      setBankQuestions(b);
+      setBankQuestions(prev => {
+        const map = new Map<string, Question>();
+        prev.forEach((item, idx) => map.set(item.id || `q_prev_${idx}`, item));
+        b.forEach((item, idx) => map.set(item.id || `q_new_${idx}`, item));
+        return Array.from(map.values());
+      });
       if (c && c.length > 0) setChapters(c);
     } catch (e) {
       console.error("Lỗi tải ngân hàng câu hỏi:", e);
     } finally {
       setIsBankLoading(false);
     }
-  }, [bGradeFilter]);
+  }, [bGradeFilter, quizGrade]);
 
   const allAvailableQuestions = useMemo(() => {
-    return bankQuestions;
-  }, [bankQuestions]);
+    const map = new Map<string, Question>();
+    // 1. Toàn bộ câu hỏi từ bảng ngân hàng bank_questions
+    bankQuestions.forEach((item, idx) => {
+      map.set(item.id || `bank_${idx}`, item);
+    });
+    // 2. Tự động hợp nhất toàn bộ câu hỏi từ tất cả các đề thi trong CSDL (>1000 câu)
+    quizzes.forEach(quiz => {
+      if (quiz.questions && Array.isArray(quiz.questions)) {
+        quiz.questions.forEach((q, idx) => {
+          const key = q.id || `quiz_${quiz.id}_${idx}`;
+          if (!map.has(key)) {
+            map.set(key, {
+              ...q,
+              quizGrade: q.quizGrade || quiz.grade,
+              chapterName: q.chapterName || quiz.category,
+              quizTitle: q.quizTitle || quiz.title
+            });
+          }
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [bankQuestions, quizzes]);
 
   // Khi chuyển Khối trong Ngân hàng câu hỏi (hoặc mở modal từ màn hình soạn đề), tự động tải câu hỏi khối tương ứng (có cache)
   useEffect(() => {
@@ -1538,7 +1564,7 @@ export default function AdminDashboard() {
                     grade={quizGrade} 
                     setGrade={setQuizGrade} 
                     chapters={chapters}
-                    bankQuestions={bankQuestions}
+                    bankQuestions={allAvailableQuestions}
                     isBankLoading={isBankLoading}
                     onLoadBank={loadBankDataIfNeeded}
                     onGenerate={handleAiGenerate}
