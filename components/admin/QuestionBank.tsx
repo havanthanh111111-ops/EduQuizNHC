@@ -4,7 +4,7 @@ import { Question, QuestionType, Grade, Chapter, QuestionLevel } from '../../typ
 import { Database, Search, CheckCircle2, CheckSquare, Square, X, BookOpen, Bookmark, Image as ImageIcon, Eye, MousePointer, Maximize2, Layers, FolderTree, Zap } from 'lucide-react';
 import LatexText from '../LatexText';
 import { v4 as uuidv4 } from 'uuid';
-import { isExamOrNonChapterName, STANDARD_CHAPTERS } from './MatrixQuizGenerator';
+import { isExamOrNonChapterName, STANDARD_CHAPTERS, getChapterNumberFromName } from './MatrixQuizGenerator';
 
 interface QuestionBankProps {
     questions: Question[];
@@ -215,7 +215,15 @@ export default function QuestionBank({
                         <select className="bg-slate-50 border px-3 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none max-w-[150px] focus:border-blue-500" value={bChapterFilter} onChange={e => setBChapterFilter(e.target.value)}>
                             <option value="all">Chương: Tất cả</option>
                             {(() => {
-                                const validDb = chapters.filter(c => (bGradeFilter === 'all' || String(c.grade) === String(bGradeFilter)) && !isExamOrNonChapterName(c.name || (c as any).title || ''));
+                                const validDb = chapters.filter(c => {
+                                    const rawName = c.name || (c as any).title || '';
+                                    if (isExamOrNonChapterName(rawName)) return false;
+                                    if (bGradeFilter !== 'all') {
+                                        return String(c.grade) === String(bGradeFilter) && getChapterNumberFromName(rawName, bGradeFilter as Grade) > 0;
+                                    }
+                                    const g = (c.grade || '12') as Grade;
+                                    return getChapterNumberFromName(rawName, g) > 0;
+                                });
                                 if (validDb.length > 0) {
                                     return validDb.map(c => (
                                         <option key={c.id} value={c.name}>{c.name || (c as any).title || "Chương chưa đặt tên"}</option>
