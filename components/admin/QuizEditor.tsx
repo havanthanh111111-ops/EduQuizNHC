@@ -19,6 +19,7 @@ import ImageStorageSettingsModal from './ImageStorageSettingsModal';
 import { extractTextFromDocx } from '../../services/docxExtractor';
 import { exportQuizToJson } from '../../services/quizExport';
 import { getImageStorageConfig, ImageStorageConfig } from '../../services/storage';
+import { isExamOrNonChapterName, getChapterNumberFromName, STANDARD_CHAPTERS } from './MatrixQuizGenerator';
 
 interface QuizEditorProps {
     editingId: string | null;
@@ -730,14 +731,16 @@ export default function QuizEditor(props: QuizEditorProps) {
         return list;
     }, [props.chapters, props.grade]);
 
-    // Danh sách chương chuyên môn gửi cho AI (ưu tiên các chương kiến thức cụ thể thay vì mục chung 'Ôn thi TX-CK')
+    // Danh sách chương chuyên môn gửi cho AI (loại bỏ hoàn toàn KTTX, KTCK, LTĐH...)
     const aiTargetChapters = useMemo(() => {
         const knowledgeOnly = relevantChapters.filter(c => {
-            const lower = (c.name || '').toLowerCase();
-            return !lower.includes('ôn thi tx') && !lower.includes('ôn gk') && !lower.includes('luyện thi');
+            const rawName = c.name || '';
+            if (isExamOrNonChapterName(rawName)) return false;
+            return getChapterNumberFromName(rawName, props.grade) > 0;
         });
-        return knowledgeOnly.length > 0 ? knowledgeOnly : relevantChapters;
-    }, [relevantChapters]);
+        if (knowledgeOnly.length > 0) return knowledgeOnly;
+        return (STANDARD_CHAPTERS[props.grade] || []).map(sc => ({ id: sc.id, name: sc.name, grade: sc.grade, order: sc.order }));
+    }, [relevantChapters, props.grade]);
 
     // Quản lý Chương học cho câu hỏi (Hỗ trợ đề KTTX, KTGK, Cuối kỳ)
     const [isAutoCategorizing, setIsAutoCategorizing] = useState(false);
