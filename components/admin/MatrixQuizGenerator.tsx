@@ -1,12 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Grade, Chapter, Question, QuestionType } from '../../types';
+import { Grade, Chapter, Question, QuestionType } from '@/types';
 import { 
     Grid3X3, Sparkles, Database, LayoutTemplate, Loader2, AlertTriangle, 
     CheckCircle2, CheckSquare, RefreshCw, Zap, Sliders, FileText, ArrowRight, RotateCcw,
     Layers, Plus, Minus, Info, ChevronDown, ChevronUp, Filter, HelpCircle
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
-import { generateMissingQuestionsForChapter } from '../../services/gemini';
+import { generateMissingQuestionsForChapter } from '@/services/gemini';
 
 interface MatrixQuizGeneratorProps {
     grade: Grade;
@@ -98,42 +98,67 @@ export const normalizeQuestionType = (t: any): QuestionType => {
     return 'mcq';
 };
 
-// Hàm kiểm tra xem tên có phải là bài thi/kiểm tra/dạng nhãn (kttx, ktck, ktgk, ôn tập...) chứ không phải tên chương
+// Hàm xác định số thứ tự chương (1, 2, 3, 4...) từ tên chương hoặc chủ đề môn Vật lí
+export const getChapterNumberFromName = (name: string, grade: Grade): number => {
+    if (!name) return 0;
+    const clean = name.toLowerCase().trim();
+    const normalized = clean.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+
+    // 1. Kiểm tra tiền tố số "Chương X" hoặc "Chương X:"
+    const m = clean.match(/ch[uư][oơ]ng\s*(\d+)/i);
+    if (m && m[1]) return parseInt(m[1], 10);
+
+    // 2. Theo môn Vật lí 12
+    if (String(grade) === '12') {
+        if (/nhiet/i.test(normalized)) return 1;
+        if (/khi/i.test(normalized)) return 2;
+        if (/\btu\b|tu\s*truong/i.test(normalized)) return 3;
+        if (/hat\s*nhan|phong\s*xa/i.test(normalized)) return 4;
+    }
+    // 3. Theo môn Vật lí 11
+    else if (String(grade) === '11') {
+        if (/dao\s*dong/i.test(normalized)) return 1;
+        if (/song/i.test(normalized)) return 2;
+        if (/dien\s*truong|dien\s*tich/i.test(normalized)) return 3;
+        if (/dong\s*dien/i.test(normalized)) return 4;
+    }
+    // 4. Theo môn Vật lí 10
+    else if (String(grade) === '10') {
+        if (/chuyen\s*dong/i.test(normalized)) return 1;
+        if (/\bluc\b|newton|niuton/i.test(normalized)) return 2;
+        if (/nang\s*luong|\bcong\b/i.test(normalized)) return 3;
+        if (/dong\s*luong/i.test(normalized)) return 4;
+        if (/tron|bien\s*dang|moment/i.test(normalized)) return 5;
+    }
+
+    return 0;
+};
+
+// Hàm kiểm tra xem tên có phải là bài thi/kiểm tra/dạng nhãn (KTTX, KTCK, KTGK, LTĐH, ôn tập...) chứ không phải tên chương
 export const isExamOrNonChapterName = (rawName: string): boolean => {
     if (!rawName) return true;
     const name = rawName.toLowerCase().trim();
     if (!name) return true;
 
-    // Các từ khóa bài kiểm tra/thi cử cần loại bỏ tuyệt đối khỏi ma trận
-    const examPatterns = [
-        /\b(kttx|ktgk|ktck|ktdk|kt15p|kt45p|kt1t|kt_tx|kt_gk|kt_ck)\b/i,
-        /\b(tx|gk|ck)\s*[-_]?\s*(\d+|[ivx]+)?\b/i,
-        /kttx\s*[-_]\s*ktgk/i,
-        /ktgk\s*[-_]\s*ktck/i,
-        /\b(hk1|hk2|hk\s*1|hk\s*2)\b/i,
-        /ki[eể]m\s*tra/i,
-        /th[uư][oờ]ng\s*xuy[eê]n/i,
-        /gi[uữ]a\s*k[yỳi]/i,
-        /cu[oố]i\s*k[yỳi]/i,
-        /[đd][iị]nh\s*k[yỳi]/i,
-        /15\s*ph[uú]t|15p\b|45\s*ph[uú]t|45p\b|1\s*ti[eế]t\b/i,
-        /[oô]n\s*t[aậ]p|[oô]n\s*thi|luy[eệ]n\s*thi|thi\s*th[uử]/i,
-        /[đd][eề]\s*thi|[đd][eề]\s*ki[eể]m\s*tra/i,
-        /ch[uư]a\s*ph[aâ]n\s*lo[aạ]i|m[aặ]c\s*[đd][iị]nh|t[oổ]ng\s*h[oợ]p/i
-    ];
+    // Chuẩn hóa bỏ dấu để bắt chính xác các từ viết tắt tiếng Việt không dấu hoặc có dấu
+    const normalized = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
 
-    for (const pat of examPatterns) {
-        if (pat.test(name)) {
-            // Nếu có chữ "Chương" và đi kèm từ khóa môn học thực sự thì giữ lại
-            if (/^ch[uư][oơ]ng\s*\d+/i.test(name)) {
-                const hasSubjectTopic = /nhi[eệ]t|kh[ií]|t[uừ]\s*tr[uư][oờ]ng|h[aạ]t\s*nh[aâ]n|dao\s*[đd][oộ]ng|s[oó]ng|[đd]i[eệ]n|chuy[eể]n\s*[đd][oộ]ng|l[ư][ợ]c|n[aă]ng\s*l[ư][ợ]ng|[đd][oộ]ng\s*l[ư][ợ]ng|quang/i.test(name);
-                if (!hasSubjectTopic) {
-                    return true;
-                }
-            } else {
-                return true;
-            }
+    // 1. Kiểm tra các từ viết tắt và cụm từ bài thi/kiểm tra/luyện thi/đại học
+    const examRegex = /(kttx|ktgk|ktck|ktdk|kttk|kt15p|kt45p|kt1t|kt_tx|kt_gk|kt_ck|ltdh|on\s*thi|luyen\s*thi|thi\s*thu|de\s*thi|kiem\s*tra|giua\s*ky|cuoi\s*ky|thuong\s*xuyen|dinh\s*ky|15\s*phut|45\s*phut|1\s*tiet|hk\s*[12]|hoc\s*ky\s*[12]|mo\s*dau|chua\s*phan\s*loai|tong\s*hop|mac\s*dinh|dgnl|dgtd|thpt)/i;
+
+    if (examRegex.test(normalized)) {
+        // Ngoại lệ: Nếu có chữ 'chương' VÀ chứa chủ đề môn học thực sự thì mới giữ lại
+        const hasChapterWord = /chuong\s*\d+/i.test(normalized);
+        const hasPhysicsTopic = /nhiet|khi|tu\s*truong|hat\s*nhan|dao\s*dong|song|dien|chuyen\s*dong|luc|nang\s*luong|dong\s*luong|quang/i.test(normalized);
+        if (hasChapterWord && hasPhysicsTopic) {
+            return false;
         }
+        return true;
+    }
+
+    // 2. Bắt các dạng tx, gk, ck, dh đứng độc lập hoặc kèm số/năm (VD: 'tx1', 'gk 2', 'ck-1', 'dh 2027', 'dh-2026')
+    if (/(^|\s|[-_])(tx|gk|ck|dh|thpt)(\s*[-_]?\s*(\d+|[ivx]+))?($|\s|[-_])/i.test(normalized)) {
+        return true;
     }
 
     return false;
@@ -170,25 +195,25 @@ const getInferredChapterNumber = (q: Question, grade: Grade): number => {
     if (String(grade) === '12') {
         // Chương 1: Vật lí nhiệt
         if (
-            /nhi[eệ]t\s*[đd][oộ]|nhi[eệ]t\s*dung|n[oó]ng\s*ch[aả]y|h[oó]a\s*h[oơ]i|nhi[eệ]t\s*l[ư][ợ]ng|n[oộ]i\s*n[aă]ng|kelvin|celsius|nhi[eệ]t\s*k[eế]|truy[eề]n\s*nhi[eệ]t|s[oô]i|bay\s*h[oơ]i|[đd][oộ]\s*c\b|cal\b|joule|nhi[eệ]t\s*n[oó]ng/i.test(combinedText)
+            /nhi[eệ]t\s*[đd][oộ]|nhi[eệ]t\s*dung|n[oó]ng\s*ch[aả]y|h[oó]a\s*h[oơ]i|nhi[eệ]t\s*l[ư][ợ]ng|n[oộ]i\s*n[aă]ng|kelvin|celsius|nhi[eệ]t\s*k[eế]|truy[eề]n\s*nhi[eệ]t|s[oô]i|bay\s*h[oơ]i|[đd][oộ]\s*c\b|cal\b|joule|nhi[eệ]t\s*n[oó]ng|chuy[eể]n\s*th[eể]|n[oó]ng\s*ch[aả]y\s*ri[eê]ng|h[oó]a\s*h[oơ]i\s*ri[eê]ng/i.test(combinedText)
         ) {
             return 1;
         }
-        // Chương 2: Khí lí tưởng
+        // Chương 2: Khí lí tưởng / Vật lý chất khí
         if (
-            /kh[ií]\s*l[yýí]\s*t[uư][ở]ng|[đd][aẳ]ng\s*nhi[eệ]t|[đd][aẳ]ng\s*t[ií]ch|[đd][aẳ]ng\s*[aá]p|boyle|bo-i-l[oơ]|charles|s[aá]c-l[oơ]|clapeyron|[aá]p\s*su[aấ]t\s*kh[ií]|mol\s*kh[ií]|avogadro|ph[aâ]n\s*t[ử]\s*kh[ií]|b[iì]nh\s*k[ií]n\s*ch[ứ]a\s*kh[ií]|p1v1|h[aă]ng\s*s[oố]\s*kh[ií]/i.test(combinedText)
+            /kh[ií]\s*l[yýí]\s*t[uư][ở]ng|ch[aấ]t\s*kh[ií]|[đd][aẳ]ng\s*nhi[eệ]t|[đd][aẳ]ng\s*t[ií]ch|[đd][aẳ]ng\s*[aá]p|boyle|bo-i-l[oơ]|charles|s[aá]c-l[oơ]|clapeyron|[aá]p\s*su[aấ]t|mol\s*kh[ií]|avogadro|ph[aâ]n\s*t[ử]\s*kh[ií]|b[iì]nh\s*k[ií]n|p1v1|h[aă]ng\s*s[oố]\s*kh[ií]|[đd][oộ]ng\s*h[oọ]c\s*ph[aâ]n\s*t[ử]|[đd][oộ]\s*kh[oô]ng\s*tuy[eệ]t|[aá]p\s*k[eế]/i.test(combinedText)
         ) {
             return 2;
         }
         // Chương 3: Từ trường
         if (
-            /t[uừ]\s*tr[uư][oờ]ng|l[ự]c\s*t[uừ]|c[aả]m\s*[ứ]ng\s*t[uừ]|lorentz|lo-ren-x[oơ]|t[uừ]\s*th[oô]ng|c[aả]m\s*[ứ]ng\s*[đd]i[eệ]n\s*t[uừ]|su[aấ]t\s*[đd]i[eệ]n\s*[đd][oộ]ng\s*c[aả]m\s*[ứ]ng|faraday|fara-[đd][aâ]y|lenz|len-x[oơ]|tesla|weber|nam\s*ch[aâ]m|cu[oộ]n\s*d[aâ]y|foucault|fu-c[oô]|t[uừ]\s*ph[oổ]/i.test(combinedText)
+            /t[uừ]\s*tr[uư][oờ]ng|l[ự]c\s*t[uừ]|c[aả]m\s*[ứ]ng\s*t[uừ]|lorentz|lo-ren-x[oơ]|t[uừ]\s*th[oô]ng|c[aả]m\s*[ứ]ng\s*[đd]i[eệ]n\s*t[uừ]|su[aấ]t\s*[đd]i[eệ]n\s*[đd][oộ]ng\s*c[aả]m\s*[ứ]ng|faraday|fara-[đd][aâ]y|lenz|len-x[oơ]|tesla|weber|nam\s*ch[aâ]m|cu[oộ]n\s*d[aâ]y|[oố]ng\s*d[aâ]y|foucault|fu-c[oô]|t[uừ]\s*ph[oổ]|n[aắ]m\s*tay\s*ph[aả]i|b[aà]n\s*tay\s*tr[aá]i/i.test(combinedText)
         ) {
             return 3;
         }
-        // Chương 4: Hạt nhân nguyên tử
+        // Chương 4: Hạt nhân nguyên tử / Vật lý hạt nhân
         if (
-            /h[aạ]t\s*nh[aâ]n|proton|pr[oô]t[oô]n|neutron|n[oơ]tr[oô]n|nuclon|nucl[oô]n|ph[oó]ng\s*x[aạ]|chu\s*k[yỳi]\s*b[aá]n\s*r[a\~]|n[aă]ng\s*l[ư][ợ]ng\s*li[eê]n\s*k[eế]t|[đd][oộ]\s*h[uụ]t\s*kh[oố]i|alpha|beta|gamma|ph[aâ]n\s*h[aạ]ch|nhi[eệ]t\s*h[aạ]ch|ph[aả]n\s*[ứ]ng\s*h[aạ]t\s*nh[aâ]n|[đd][oồ]ng\s*v[iị]|mev|đơn vị u\b/i.test(combinedText)
+            /h[aạ]t\s*nh[aâ]n|proton|pr[oô]t[oô]n|neutron|n[oơ]tr[oô]n|nuclon|nucl[oô]n|nucl[eê][oô]n|ph[oó]ng\s*x[aạ]|chu\s*k[yỳi]\s*b[aá]n\s*r[a\~]|n[aă]ng\s*l[ư][ợ]ng\s*li[eê]n\s*k[eế]t|[đd][oộ]\s*h[uụ]t\s*kh[oố]i|alpha|beta|gamma|ph[aâ]n\s*h[aạ]ch|nhi[eệ]t\s*h[aạ]ch|ph[aả]n\s*[ứ]ng\s*h[aạ]t\s*nh[aâ]n|[đd][oồ]ng\s*v[iị]|mev|đơn vị u\b|tia\s*ph[oó]ng\s*x[aạ]/i.test(combinedText)
         ) {
             return 4;
         }
@@ -246,35 +271,25 @@ const matchQuestionChapter = (
     // 1. Khớp theo chapterId chính xác
     if (q.chapterId && q.chapterId === chId) return true;
 
-    // 2. So khớp trực tiếp tên chương nếu q.chapterName là tên chương hợp lệ (không phải nhãn thi cử)
-    const qCh = (q.chapterName || '').toLowerCase().trim();
-    const target = chName.toLowerCase().trim();
-    if (qCh && !isExamOrNonChapterName(qCh)) {
-        if (qCh === target) return true;
+    const targetNum = getChapterNumberFromName(chName, grade);
 
-        // So khớp theo đầu số chương (VD: "Chương 1" khớp "Chương 1: Vật lí nhiệt")
-        const matchPrefix = target.match(/chương\s*(\d+)/i);
-        const qMatchPrefix = qCh.match(/chương\s*(\d+)/i);
-        if (matchPrefix && qMatchPrefix && matchPrefix[1] === qMatchPrefix[1]) {
+    // 2. So khớp trực tiếp tên chương nếu q.chapterName là tên chương hợp lệ (không phải nhãn thi cử)
+    const qCh = (q.chapterName || '').trim();
+    if (qCh && !isExamOrNonChapterName(qCh)) {
+        const qNum = getChapterNumberFromName(qCh, grade);
+        if (qNum > 0 && targetNum > 0 && qNum === targetNum) {
             return true;
         }
-        if (matchPrefix) {
-            const num = matchPrefix[1];
-            if (qCh.startsWith(`chương ${num}:`) || qCh.startsWith(`chương ${num} `) || qCh === `chương ${num}`) {
-                return true;
-            }
-        }
+        if (qCh.toLowerCase() === chName.toLowerCase().trim()) return true;
     }
 
-    // 3. Phân loại câu hỏi dựa theo nội dung & từ khóa Vật lí vào số chương
+    // 3. Phân loại câu hỏi dựa theo nội dung & từ khóa môn học vào số chương
     const inferredNum = getInferredChapterNumber(q, grade);
-    const targetNum = parseInt(chName.match(/chương\s*(\d+)/i)?.[1] || '0');
-
     if (inferredNum > 0 && targetNum > 0) {
         return inferredNum === targetNum;
     }
 
-    // 4. Fallback: Nếu câu hỏi có nhãn thi cử như "kttx - ktgk 1" và không có từ khóa đặc thù
+    // 4. Fallback: Nếu câu hỏi có nhãn thi cử như "kttx - ktgk 1" hay "ltdh" và không có từ khóa đặc thù
     // Phân bổ đều câu hỏi vào các chương theo chuỗi hash của ID câu hỏi để không bỏ sót câu hỏi nào trong ngân hàng
     if (targetNum > 0 && allChapters.length > 0) {
         const qIdentifier = q.id || q.bankOriginId || q.text || '';
@@ -338,40 +353,62 @@ export default function MatrixQuizGenerator({
         setQuizTitle(`ĐỀ KIỂM TRA MA TRẬN VẬT LÝ ${grade}`);
     }, [grade]);
 
-    // Danh sách các chương chỉ hiển thị TÊN CHƯƠNG THỰC TẾ (loại bỏ tuyệt đối KTTX, KTCK, KTGK, ôn tập...)
+    // Danh sách các chương chỉ hiển thị TÊN CHƯƠNG THỰC TẾ (loại bỏ tuyệt đối KTTX, KTCK, KTGK, LTĐH, ôn tập...)
+    // Đối với Khối 12: Đảm bảo chỉ xuất hiện 4 chương kiến thức: Vật Lý nhiệt, Khí lí tưởng, Từ trường, Hạt nhân
     const displayChapters = useMemo(() => {
-        // 1. Lọc các chương trong DB thuộc khối này và không phải nhãn thi cử
+        // 1. Lọc các chương trong DB thuộc khối này: loại bỏ KTTX, KTCK, LTĐH và phải thuộc các chương Vật lí của khối
         const dbList = chapters.filter(c => String(c.grade) === String(grade));
-        const validDbChapters = dbList.filter(c => !isExamOrNonChapterName(c.name || (c as any).title || ''));
+        const validDbChapters = dbList.filter(c => {
+            const rawName = c.name || (c as any).title || '';
+            if (isExamOrNonChapterName(rawName)) return false;
+            return getChapterNumberFromName(rawName, grade) > 0;
+        });
 
-        // 2. Danh sách chương chuẩn GDPT 2018
+        // 2. Danh sách chương chuẩn GDPT 2018 của khối
         const standardList = STANDARD_CHAPTERS[grade] || [];
 
-        if (validDbChapters.length > 0) {
-            const merged = [...validDbChapters];
-            // Bổ sung các chương chuẩn nếu danh mục DB chưa đầy đủ
-            standardList.forEach(sc => {
-                const scNum = sc.name.match(/chương\s*(\d+)/i)?.[1];
-                const alreadyExists = merged.some(c => {
-                    const cNum = (c.name || '').match(/chương\s*(\d+)/i)?.[1];
-                    if (scNum && cNum && scNum === cNum) return true;
-                    return (c.name || '').toLowerCase().includes(sc.name.toLowerCase());
+        // Gom các chương theo đúng thứ tự bài học chuẩn (Chương 1, 2, 3, 4...)
+        const finalChapters: { id: string; name: string; grade: Grade; order: number }[] = [];
+
+        standardList.forEach((sc, idx) => {
+            const targetNum = idx + 1;
+            // Ưu tiên bản ghi trong DB nếu giáo viên đã tạo chương này để giữ nguyên id gốc đồng bộ với ngân hàng
+            const matchedDb = validDbChapters.find(c => {
+                const cNum = getChapterNumberFromName(c.name || '', grade);
+                return cNum === targetNum;
+            });
+
+            if (matchedDb) {
+                finalChapters.push({
+                    id: matchedDb.id,
+                    name: matchedDb.name,
+                    grade: grade,
+                    order: targetNum
                 });
-                if (!alreadyExists && merged.length < 6) {
-                    merged.push(sc);
-                }
-            });
+            } else {
+                finalChapters.push({
+                    ...sc,
+                    order: targetNum
+                });
+            }
+        });
 
-            merged.sort((a, b) => {
-                const numA = parseInt((a.name || '').match(/chương\s*(\d+)/i)?.[1] || `${a.order || 99}`);
-                const numB = parseInt((b.name || '').match(/chương\s*(\d+)/i)?.[1] || `${b.order || 99}`);
-                return numA - numB;
-            });
-            return merged;
-        }
+        // Bổ sung các chương hợp lệ khác trong DB nếu có và chưa xuất hiện
+        validDbChapters.forEach(c => {
+            const cNum = getChapterNumberFromName(c.name || '', grade);
+            const alreadyIn = finalChapters.some(fc => fc.id === c.id || getChapterNumberFromName(fc.name, grade) === cNum);
+            if (!alreadyIn && cNum > 0) {
+                finalChapters.push({
+                    id: c.id,
+                    name: c.name,
+                    grade: grade,
+                    order: cNum || c.order || 99
+                });
+            }
+        });
 
-        // Mặc định trả về danh sách các chương chuẩn GDPT 2018 của khối
-        return standardList;
+        finalChapters.sort((a, b) => (a.order || 0) - (b.order || 0));
+        return finalChapters;
     }, [chapters, grade]);
 
     // Bảng ma trận số lượng câu mong muốn: key `${chapterId}__${questionType}` -> { b, h, vd, vdc }
