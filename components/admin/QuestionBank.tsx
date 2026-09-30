@@ -68,6 +68,12 @@ const getQuestionImageUrl = (q: any): string | null => {
         const htmlMatch = q.text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i);
         if (htmlMatch) return htmlMatch[1];
     }
+    if (q.context && typeof q.context === 'string') {
+        const mdMatch = q.context.match(/!\[.*?\]\((https?:\/\/[^\s\)]+)\)/);
+        if (mdMatch) return mdMatch[1];
+        const htmlMatch = q.context.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i);
+        if (htmlMatch) return htmlMatch[1];
+    }
     if (Array.isArray(q.subQuestions)) {
         for (const sq of q.subQuestions) {
             if (sq?.imageUrl && typeof sq.imageUrl === 'string' && sq.imageUrl.trim()) return sq.imageUrl.trim();

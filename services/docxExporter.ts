@@ -334,6 +334,31 @@ async function fetchImageBufferAndDimensions(
 }
 
 /**
+ * Trích xuất các URL ảnh inline (cả HTML <img> và Markdown) và làm sạch text để đưa vào Word Native
+ */
+function extractImagesAndCleanText(rawText: string): { cleanText: string; inlineImageUrls: string[] } {
+  if (!rawText) return { cleanText: '', inlineImageUrls: [] };
+  const inlineImageUrls: string[] = [];
+  
+  // Extract markdown ![alt](url)
+  let cleanText = rawText.replace(/!\[.*?\]\((https?:\/\/[^\s\)]+|data:image\/[^\s\)]+)\)/g, (_, url) => {
+    if (url && !inlineImageUrls.includes(url.trim())) inlineImageUrls.push(url.trim());
+    return '';
+  });
+
+  // Extract HTML <img ... src="..." ... />
+  cleanText = cleanText.replace(/<img[^>]+src=["'](https?:\/\/[^"']+|data:image\/[^"']+)["'][^>]*>/gi, (_, url) => {
+    if (url && !inlineImageUrls.includes(url.trim())) inlineImageUrls.push(url.trim());
+    return '';
+  });
+
+  // Xóa các thẻ HTML bao bọc layout để không in mã thừa ra Word
+  cleanText = cleanText.replace(/<\/?(?:div|span|p|b|i|strong|em|br)[^>]*>/gi, ' ');
+
+  return { cleanText: cleanText.trim(), inlineImageUrls };
+}
+
+/**
  * Phân tích cú pháp chuỗi LaTeX sang các thành phần Word Math OMML Component
  */
 export function parseLatexToDocxMath(latex: string): MathComponent[] {
@@ -1049,6 +1074,7 @@ export async function generateNativeWordDocx(
 
       // Lời dẫn / dữ liệu dùng chung nếu có (Chỉ xuất 1 lần ở câu đầu tiên trong nhóm)
       if (q.context && ctxInfo.isFirstInGroup) {
+        const { cleanText: ctxCleanText, inlineImageUrls: ctxImages } = extractImagesAndCleanText(ctxInfo.cleanedContext || q.context);
         contentElements.push(
           new Paragraph({
             children: [
@@ -1059,14 +1085,38 @@ export async function generateNativeWordDocx(
                 bold: true,
                 color: '854d0e',
               }),
-              ...parseTextWithMath(ctxInfo.cleanedContext || q.context, { size: 22, italics: true }),
+              ...parseTextWithMath(ctxCleanText, { size: 22, italics: true }),
             ],
             indent: { left: 180 },
             spacing: { before: 80, after: 60 },
           })
         );
+
+        // Chèn ảnh của lời dẫn nếu có
+        for (const imgUrl of ctxImages) {
+          const imgObj = await fetchImageBufferAndDimensions(imgUrl);
+          if (imgObj) {
+            contentElements.push(
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new ImageRun({
+                    type: 'png',
+                    data: imgObj.data,
+                    transformation: {
+                      width: imgObj.width,
+                      height: imgObj.height,
+                    },
+                  }),
+                ],
+                spacing: { before: 60, after: 80 },
+              })
+            );
+          }
+        }
       }
 
+      const { cleanText: qCleanText, inlineImageUrls: qInlineImages } = extractImagesAndCleanText(q.text);
       const questionRuns = [
         new TextRun({
           text: `Câu ${qIndex}: `,
@@ -1086,7 +1136,7 @@ export async function generateNativeWordDocx(
               }),
             ]
           : []),
-        ...parseTextWithMath(q.text, { size: 23 }),
+        ...parseTextWithMath(qCleanText, { size: 23 }),
       ];
 
       contentElements.push(
@@ -1096,8 +1146,31 @@ export async function generateNativeWordDocx(
         })
       );
 
-      // Chèn hình ảnh câu hỏi nếu có
-      if (q.imageUrl) {
+      // Chèn các hình ảnh inline trong câu hỏi
+      for (const imgUrl of qInlineImages) {
+        const imgObj = await fetchImageBufferAndDimensions(imgUrl);
+        if (imgObj) {
+          contentElements.push(
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [
+                new ImageRun({
+                  type: 'png',
+                  data: imgObj.data,
+                  transformation: {
+                    width: imgObj.width,
+                    height: imgObj.height,
+                  },
+                }),
+              ],
+              spacing: { before: 60, after: 80 },
+            })
+          );
+        }
+      }
+
+      // Chèn hình ảnh câu hỏi đính kèm (nếu chưa có trong inline)
+      if (q.imageUrl && !qInlineImages.includes(q.imageUrl)) {
         const imgObj = await fetchImageBufferAndDimensions(q.imageUrl);
         if (imgObj) {
           contentElements.push(
@@ -1265,6 +1338,7 @@ export async function generateNativeWordDocx(
       const ctxInfo = getContextGroupInfo(groupTfQs, idx);
 
       if (q.context && ctxInfo.isFirstInGroup) {
+        const { cleanText: ctxCleanText, inlineImageUrls: ctxImages } = extractImagesAndCleanText(ctxInfo.cleanedContext || q.context);
         contentElements.push(
           new Paragraph({
             children: [
@@ -1275,14 +1349,37 @@ export async function generateNativeWordDocx(
                 bold: true,
                 color: '854d0e',
               }),
-              ...parseTextWithMath(ctxInfo.cleanedContext || q.context, { size: 22, italics: true }),
+              ...parseTextWithMath(ctxCleanText, { size: 22, italics: true }),
             ],
             indent: { left: 180 },
             spacing: { before: 80, after: 60 },
           })
         );
+
+        for (const imgUrl of ctxImages) {
+          const imgObj = await fetchImageBufferAndDimensions(imgUrl);
+          if (imgObj) {
+            contentElements.push(
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new ImageRun({
+                    type: 'png',
+                    data: imgObj.data,
+                    transformation: {
+                      width: imgObj.width,
+                      height: imgObj.height,
+                    },
+                  }),
+                ],
+                spacing: { before: 60, after: 80 },
+              })
+            );
+          }
+        }
       }
 
+      const { cleanText: qCleanText, inlineImageUrls: qInlineImages } = extractImagesAndCleanText(q.text);
       const questionRuns = [
         new TextRun({
           text: `Câu ${qIndex}: `,
@@ -1302,7 +1399,7 @@ export async function generateNativeWordDocx(
               }),
             ]
           : []),
-        ...parseTextWithMath(q.text, { size: 23 }),
+        ...parseTextWithMath(qCleanText, { size: 23 }),
       ];
 
       contentElements.push(
@@ -1312,7 +1409,29 @@ export async function generateNativeWordDocx(
         })
       );
 
-      if (q.imageUrl) {
+      for (const imgUrl of qInlineImages) {
+        const imgObj = await fetchImageBufferAndDimensions(imgUrl);
+        if (imgObj) {
+          contentElements.push(
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [
+                new ImageRun({
+                  type: 'png',
+                  data: imgObj.data,
+                  transformation: {
+                    width: imgObj.width,
+                    height: imgObj.height,
+                  },
+                }),
+              ],
+              spacing: { before: 60, after: 80 },
+            })
+          );
+        }
+      }
+
+      if (q.imageUrl && !qInlineImages.includes(q.imageUrl)) {
         const imgObj = await fetchImageBufferAndDimensions(q.imageUrl);
         if (imgObj) {
           contentElements.push(
@@ -1405,6 +1524,7 @@ export async function generateNativeWordDocx(
       const ctxInfo = getContextGroupInfo(shortQs, idx);
 
       if (q.context && ctxInfo.isFirstInGroup) {
+        const { cleanText: ctxCleanText, inlineImageUrls: ctxImages } = extractImagesAndCleanText(ctxInfo.cleanedContext || q.context);
         contentElements.push(
           new Paragraph({
             children: [
@@ -1415,14 +1535,37 @@ export async function generateNativeWordDocx(
                 bold: true,
                 color: '854d0e',
               }),
-              ...parseTextWithMath(ctxInfo.cleanedContext || q.context, { size: 22, italics: true }),
+              ...parseTextWithMath(ctxCleanText, { size: 22, italics: true }),
             ],
             indent: { left: 180 },
             spacing: { before: 80, after: 60 },
           })
         );
+
+        for (const imgUrl of ctxImages) {
+          const imgObj = await fetchImageBufferAndDimensions(imgUrl);
+          if (imgObj) {
+            contentElements.push(
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new ImageRun({
+                    type: 'png',
+                    data: imgObj.data,
+                    transformation: {
+                      width: imgObj.width,
+                      height: imgObj.height,
+                    },
+                  }),
+                ],
+                spacing: { before: 60, after: 80 },
+              })
+            );
+          }
+        }
       }
 
+      const { cleanText: qCleanText, inlineImageUrls: qInlineImages } = extractImagesAndCleanText(q.text);
       const questionRuns = [
         new TextRun({
           text: `Câu ${qIndex}: `,
@@ -1442,7 +1585,7 @@ export async function generateNativeWordDocx(
               }),
             ]
           : []),
-        ...parseTextWithMath(q.text, { size: 23 }),
+        ...parseTextWithMath(qCleanText, { size: 23 }),
       ];
 
       contentElements.push(
@@ -1452,7 +1595,29 @@ export async function generateNativeWordDocx(
         })
       );
 
-      if (q.imageUrl) {
+      for (const imgUrl of qInlineImages) {
+        const imgObj = await fetchImageBufferAndDimensions(imgUrl);
+        if (imgObj) {
+          contentElements.push(
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [
+                new ImageRun({
+                  type: 'png',
+                  data: imgObj.data,
+                  transformation: {
+                    width: imgObj.width,
+                    height: imgObj.height,
+                  },
+                }),
+              ],
+              spacing: { before: 60, after: 80 },
+            })
+          );
+        }
+      }
+
+      if (q.imageUrl && !qInlineImages.includes(q.imageUrl)) {
         const imgObj = await fetchImageBufferAndDimensions(q.imageUrl);
         if (imgObj) {
           contentElements.push(

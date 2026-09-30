@@ -498,7 +498,9 @@ export default function QuizTaker({ quiz, student, onExit }: QuizTakerProps) {
                                     <span className="text-blue-600 font-black italic underline uppercase shrink-0">Câu {idx + 1}.</span>
                                     <div className="text-slate-800 text-lg font-bold leading-relaxed"><LatexText text={q.text}/></div>
                                 </div>
-                                {q.imageUrl && <div className="mb-6 flex justify-center"><img src={q.imageUrl} className="max-h-80 rounded-2xl border border-slate-100 shadow-sm" alt="q" /></div>}
+                                {q.imageUrl && !q.text?.includes(q.imageUrl) && !(q.context && q.context.includes(q.imageUrl)) && (
+                                    <div className="mb-6 flex justify-center"><img src={q.imageUrl} className="max-h-80 rounded-2xl border border-slate-100 shadow-sm" alt="q" /></div>
+                                )}
                                 {q.type === 'mcq' && q.options && (
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pl-0 md:pl-10">
                                         {q.options.map((opt, oi) => (

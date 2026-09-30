@@ -7,7 +7,7 @@ import {
   ShieldAlert, ShieldCheck, Sparkles, Zap, Type as TypeIcon, X, Link as LinkIcon, 
   EyeOff, FileCode, GraduationCap, CheckSquare, Square, Users, Copy, Check,
   Link2, Layers, Image as ImageLucide, FileText, Bookmark, Quote, ClipboardPaste,
-  FolderTree, AlertTriangle, ArrowLeft, RotateCcw
+  FolderTree, AlertTriangle, ArrowLeft, RotateCcw, ImagePlus
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import LatexText from '../LatexText';
@@ -16,9 +16,11 @@ import QuizImageGalleryModal from './QuizImageGalleryModal';
 import PdfImageExtractorModal from './PdfImageExtractorModal';
 import LatexHelperModal from './LatexHelperModal';
 import ImageStorageSettingsModal from './ImageStorageSettingsModal';
+import InsertImageModal from './InsertImageModal';
 import { extractTextFromDocx } from '../../services/docxExtractor';
 import { exportQuizToJson } from '../../services/quizExport';
-import { getImageStorageConfig, ImageStorageConfig } from '../../services/storage';
+import { getImageStorageConfig, ImageStorageConfig, uploadQuizImageWithResult } from '../../services/storage';
+import { buildImageTag } from '../../services/imageUtils';
 import { isExamOrNonChapterName, getChapterNumberFromName, STANDARD_CHAPTERS } from './MatrixQuizGenerator';
 
 interface QuizEditorProps {
@@ -105,6 +107,7 @@ interface QuestionSectionProps {
     onBatchSolveSection?: () => void;
     solvingQId?: string | null;
     isSolvingBatch?: boolean;
+    onOpenInsertImageModal?: (qId: string, field: 'context' | 'text' | 'solution', label?: string) => void;
 }
 
 const QuestionSection: React.FC<QuestionSectionProps> = ({ 
@@ -126,7 +129,8 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
     onSolveQuestion,
     onBatchSolveSection,
     solvingQId,
-    isSolvingBatch
+    isSolvingBatch,
+    onOpenInsertImageModal
 }) => {
     const [quickPoints, setQuickPoints] = useState(type === 'mcq' ? "0.25" : "1.0");
     const [copiedUrlQId, setCopiedUrlQId] = useState<string | null>(null);
@@ -170,6 +174,75 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
         }
     };
 
+    // Chèn nhanh ảnh đính kèm hiện tại vào nội dung câu hỏi hoặc lời dẫn
+    const handleInsertExistingImageToField = (qId: string, field: 'context' | 'text', url: string) => {
+        const nl = [...questions];
+        const i = nl.findIndex(x => x.id === qId);
+        if (i !== -1) {
+            const tag = buildImageTag({ url, maxHeight: 260, align: 'center' });
+            const oldVal = nl[i][field] || '';
+            nl[i][field] = oldVal ? `${oldVal}\n${tag}` : tag;
+            setQuestions(nl);
+        }
+    };
+
+    // Xử lý dán ảnh trực tiếp từ Clipboard (Ctrl + V) khi con trỏ đang ở trong textarea Lời dẫn hoặc Câu hỏi
+    const handleTextareaImagePaste = async (
+        e: React.ClipboardEvent<HTMLTextAreaElement>,
+        qId: string,
+        field: 'context' | 'text'
+    ) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        let imageFile: File | null = null;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.startsWith('image/')) {
+                imageFile = items[i].getAsFile();
+                break;
+            }
+        }
+        if (!imageFile) return; // Nếu là văn bản bình thường thì cho paste mặc định
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const textarea = e.currentTarget;
+        const start = textarea.selectionStart || 0;
+        const end = textarea.selectionEnd || 0;
+
+        const placeholder = `\n[⏳ Đang tải ảnh lên...]\n`;
+        const nl = [...questions];
+        const idx = nl.findIndex(x => x.id === qId);
+        if (idx === -1) return;
+
+        const currentVal = nl[idx][field] || '';
+        const textWithPlaceholder = currentVal.substring(0, start) + placeholder + currentVal.substring(end);
+        nl[idx][field] = textWithPlaceholder;
+        setQuestions([...nl]);
+
+        try {
+            const res = await uploadQuizImageWithResult(imageFile);
+            const tag = buildImageTag({ url: res.url, maxHeight: 260, align: 'center' });
+
+            const updated = [...questions];
+            const curIdx = updated.findIndex(x => x.id === qId);
+            if (curIdx !== -1) {
+                const val = updated[curIdx][field] || '';
+                updated[curIdx][field] = val.replace(placeholder, tag);
+                setQuestions(updated);
+            }
+        } catch (err: any) {
+            alert("Lỗi khi tải ảnh: " + (err?.message || 'Không xác định'));
+            const updated = [...questions];
+            const curIdx = updated.findIndex(x => x.id === qId);
+            if (curIdx !== -1) {
+                const val = updated[curIdx][field] || '';
+                updated[curIdx][field] = val.replace(placeholder, '');
+                setQuestions(updated);
+            }
+        }
+    };
+
     // Xử lý Dán ảnh trực tiếp từ Clipboard khi bấm nút
     const handlePasteClipboardImage = async (qId: string) => {
         try {
@@ -207,8 +280,11 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
         }
     };
 
-    // Bắt sự kiện Paste (Ctrl + V) trên toàn bộ khung câu hỏi
+    // Bắt sự kiện Paste (Ctrl + V) trên toàn bộ khung câu hỏi (chỉ khi không trỏ trong textarea)
     const handleQuestionPaste = (e: React.ClipboardEvent, qId: string) => {
+        const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+        if (tag === 'textarea' || tag === 'input') return;
+
         const items = e.clipboardData?.items;
         if (!items || items.length === 0) return;
 
@@ -382,7 +458,7 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
 
                     {/* MỤC LỜI DẪN / DỮ LIỆU DÙNG CHUNG CHO CHÙM CÂU HỎI */}
                     <div className="mb-6 bg-amber-50/60 border-2 border-amber-200/80 rounded-[2rem] p-5">
-                        <div className="flex items-center justify-between mb-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                             <div className="flex items-center gap-2">
                                 <Bookmark size={15} className="text-amber-600 shrink-0"/>
                                 <label className="text-[11px] font-black text-amber-900 uppercase tracking-tight">
@@ -392,33 +468,47 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
                                     — Dùng khi có đoạn văn/bảng số liệu chung cho nhiều câu
                                 </span>
                             </div>
-                            {q.context && (
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        const nl = [...questions];
-                                        const i = nl.findIndex(x => x.id === q.id);
-                                        nl[i].context = undefined;
-                                        setQuestions(nl);
-                                    }}
-                                    className="text-[9px] font-black text-amber-700 hover:text-red-600 uppercase px-2 py-0.5 rounded-lg hover:bg-amber-100/50 transition-colors"
-                                >
-                                    Xóa lời dẫn
-                                </button>
-                            )}
+                            <div className="flex items-center gap-2">
+                                {onOpenInsertImageModal && (
+                                    <button
+                                        type="button"
+                                        onClick={() => onOpenInsertImageModal(q.id, 'context', `Lời dẫn Câu ${idx + 1}`)}
+                                        className="flex items-center gap-1.5 px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-[10px] font-black uppercase shadow-xs transition-all active:scale-95"
+                                        title="Chèn 1 hoặc nhiều ảnh trực tiếp vào lời dẫn (tải từ máy tính, dán clipboard hoặc nhập link)"
+                                    >
+                                        <ImagePlus size={13} />
+                                        <span>+ Chèn ảnh vào lời dẫn</span>
+                                    </button>
+                                )}
+                                {q.context && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const nl = [...questions];
+                                            const i = nl.findIndex(x => x.id === q.id);
+                                            nl[i].context = undefined;
+                                            setQuestions(nl);
+                                        }}
+                                        className="text-[9px] font-black text-amber-700 hover:text-red-600 uppercase px-2 py-0.5 rounded-lg hover:bg-amber-100/50 transition-colors"
+                                    >
+                                        Xóa lời dẫn
+                                    </button>
+                                )}
+                            </div>
                         </div>
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                             <div>
                                 <textarea
                                     className="w-full p-4 bg-white border border-amber-200 rounded-2xl text-xs font-semibold text-slate-800 outline-none min-h-[60px] focus:border-amber-400 transition-colors"
                                     value={q.context || ''}
+                                    onPaste={(e) => handleTextareaImagePaste(e, q.id, 'context')}
                                     onChange={e => {
                                         const nl = [...questions];
                                         const i = nl.findIndex(x => x.id === q.id);
                                         nl[i].context = e.target.value || undefined;
                                         setQuestions(nl);
                                     }}
-                                    placeholder="VD: Dữ liệu dùng chung cho câu 3 và 4: Cho hàm số f(x) liên tục trên đoạn [-2; 4] có đồ thị như sau..."
+                                    placeholder="VD: Dữ liệu dùng chung cho câu 3 và 4: Cho đoạn mạch hoặc đồ thị... (Mẹo: Bấm '+ Chèn ảnh vào lời dẫn' hoặc ấn Ctrl+V trực tiếp vào đây để dán ảnh)"
                                 />
                             </div>
                             <div className="p-4 bg-amber-100/40 border border-amber-200/60 rounded-2xl text-xs min-h-[60px] overflow-auto">
@@ -436,20 +526,44 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
                         <div className="space-y-2">
-                            <div className="flex items-center justify-between ml-2">
+                            <div className="flex items-center justify-between ml-2 flex-wrap gap-2">
                                 <label className="text-[10px] font-black text-slate-400 uppercase">Nội dung đề (LaTeX: $...$)</label>
-                                {onOpenLatexHelper && (
-                                    <button
-                                        type="button"
-                                        onClick={() => onOpenLatexHelper(q.id, `Câu ${idx + 1}`)}
-                                        className="flex items-center gap-1 text-[10px] font-black text-blue-600 hover:text-white bg-blue-50 hover:bg-blue-600 px-2 py-0.5 rounded-lg border border-blue-200 transition-all shadow-xs"
-                                        title="Mở bảng hỗ trợ chèn công thức Toán & ký hiệu LaTeX"
-                                    >
-                                        <Sparkles size={11} /> Hỗ trợ LaTeX
-                                    </button>
-                                )}
+                                <div className="flex items-center gap-2">
+                                    {onOpenInsertImageModal && (
+                                        <button
+                                            type="button"
+                                            onClick={() => onOpenInsertImageModal(q.id, 'text', `Câu ${idx + 1}`)}
+                                            className="flex items-center gap-1 text-[10px] font-black text-indigo-700 hover:text-white bg-indigo-50 hover:bg-indigo-600 px-2.5 py-1 rounded-xl border border-indigo-200 transition-all shadow-xs active:scale-95"
+                                            title="Chèn 1 hoặc nhiều ảnh trực tiếp vào câu hỏi (Ví dụ: Hình 1, Hình 2...)"
+                                        >
+                                            <ImagePlus size={12} />
+                                            <span>+ Chèn ảnh vào câu</span>
+                                        </button>
+                                    )}
+                                    {onOpenLatexHelper && (
+                                        <button
+                                            type="button"
+                                            onClick={() => onOpenLatexHelper(q.id, `Câu ${idx + 1}`)}
+                                            className="flex items-center gap-1 text-[10px] font-black text-blue-600 hover:text-white bg-blue-50 hover:bg-blue-600 px-2 py-1 rounded-xl border border-blue-200 transition-all shadow-xs"
+                                            title="Mở bảng hỗ trợ chèn công thức Toán & ký hiệu LaTeX"
+                                        >
+                                            <Sparkles size={11} /> Hỗ trợ LaTeX
+                                        </button>
+                                    )}
+                                </div>
                             </div>
-                            <textarea className="w-full p-6 bg-slate-50 border-2 border-slate-100 rounded-[2rem] text-sm font-bold outline-none min-h-[120px] focus:border-blue-300 transition-colors" value={q.text} onChange={e => { const nl = [...questions]; const i = nl.findIndex(x => x.id === q.id); nl[i].text = e.target.value; setQuestions(nl); }} placeholder="VD: Tìm $x$ biết $x^2 = 4$..." />
+                            <textarea 
+                                className="w-full p-6 bg-slate-50 border-2 border-slate-100 rounded-[2rem] text-sm font-bold outline-none min-h-[120px] focus:border-blue-300 transition-colors" 
+                                value={q.text} 
+                                onPaste={(e) => handleTextareaImagePaste(e, q.id, 'text')}
+                                onChange={e => { 
+                                    const nl = [...questions]; 
+                                    const i = nl.findIndex(x => x.id === q.id); 
+                                    nl[i].text = e.target.value; 
+                                    setQuestions(nl); 
+                                }} 
+                                placeholder="VD: Tìm $x$ biết $x^2 = 4$... (Mẹo: Bấm '+ Chèn ảnh vào câu' hoặc nhấn Ctrl+V trực tiếp vào đây để dán ảnh)" 
+                            />
                         </div>
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-blue-500 uppercase ml-2">Xem trước hiển thị</label>
@@ -552,6 +666,30 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
                                     >
                                         {copiedUrlQId === q.id ? <Check size={14} /> : <Copy size={14} />}
                                         {copiedUrlQId === q.id ? 'ĐÃ COPY LINK!' : 'COPY LINK ẢNH'}
+                                    </button>
+                                )}
+
+                                {/* Nút chèn ảnh đính kèm này trực tiếp vào nội dung câu hỏi */}
+                                {q.imageUrl && (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleInsertExistingImageToField(q.id, 'text', q.imageUrl!)}
+                                        className="px-4 py-2.5 bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white border border-blue-200 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1.5 shadow-sm active:scale-95"
+                                        title="Chèn mã thẻ ảnh này trực tiếp vào nội dung câu hỏi"
+                                    >
+                                        <ImagePlus size={14} /> CHÈN VÀO CÂU
+                                    </button>
+                                )}
+
+                                {/* Nút chèn ảnh đính kèm này trực tiếp vào lời dẫn */}
+                                {q.imageUrl && (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleInsertExistingImageToField(q.id, 'context', q.imageUrl!)}
+                                        className="px-4 py-2.5 bg-amber-50 text-amber-800 hover:bg-amber-600 hover:text-white border border-amber-200 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1.5 shadow-sm active:scale-95"
+                                        title="Chèn mã thẻ ảnh này trực tiếp vào lời dẫn của câu hỏi"
+                                    >
+                                        <Bookmark size={14} /> CHÈN VÀO LỜI DẪN
                                     </button>
                                 )}
 
@@ -1051,6 +1189,29 @@ export default function QuizEditor(props: QuizEditorProps) {
             setLatexInitialCode('$\\dfrac{a}{b}$');
         }
         setIsLatexHelperOpen(true);
+    };
+
+    // State & Handlers cho Modal Chèn hình ảnh vào Lời dẫn / Câu hỏi
+    const [isInsertImageModalOpen, setIsInsertImageModalOpen] = useState(false);
+    const [insertImageTargetQId, setInsertImageTargetQId] = useState<string | null>(null);
+    const [insertImageTargetField, setInsertImageTargetField] = useState<'context' | 'text' | 'solution'>('text');
+    const [insertImageTargetLabel, setInsertImageTargetLabel] = useState<string>('');
+
+    const handleOpenInsertImageModal = (qId: string, field: 'context' | 'text' | 'solution', label?: string) => {
+        setInsertImageTargetQId(qId);
+        setInsertImageTargetField(field);
+        setInsertImageTargetLabel(label || (field === 'context' ? 'Lời dẫn' : 'Câu hỏi'));
+        setIsInsertImageModalOpen(true);
+    };
+
+    const handleInsertImageToField = (qId: string, field: 'context' | 'text' | 'solution', insertedHtml: string) => {
+        const nl = [...props.questions];
+        const idx = nl.findIndex(x => x.id === qId);
+        if (idx !== -1) {
+            const currentVal = nl[idx][field] || '';
+            nl[idx][field] = currentVal ? `${currentVal}\n${insertedHtml}` : insertedHtml;
+            props.setQuestions(nl);
+        }
     };
 
     const handleInsertLatexSnippet = (code: string) => {
@@ -2290,6 +2451,7 @@ export default function QuizEditor(props: QuizEditorProps) {
                 onOpenBatchForImage={handleOpenBatchForImage}
                 uniqueImagesCount={uniqueImagesCount}
                 onOpenLatexHelper={handleOpenLatexHelper}
+                onOpenInsertImageModal={handleOpenInsertImageModal}
                 relevantChapters={relevantChapters}
                 onOpenImageStorageSettings={() => setIsImageStorageSettingsOpen(true)}
                 imageStorageConfig={imageStorageConfig}
@@ -2311,6 +2473,7 @@ export default function QuizEditor(props: QuizEditorProps) {
                 onOpenBatchForImage={handleOpenBatchForImage}
                 uniqueImagesCount={uniqueImagesCount}
                 onOpenLatexHelper={handleOpenLatexHelper}
+                onOpenInsertImageModal={handleOpenInsertImageModal}
                 relevantChapters={relevantChapters}
                 onOpenImageStorageSettings={() => setIsImageStorageSettingsOpen(true)}
                 imageStorageConfig={imageStorageConfig}
@@ -2332,6 +2495,7 @@ export default function QuizEditor(props: QuizEditorProps) {
                 onOpenBatchForImage={handleOpenBatchForImage}
                 uniqueImagesCount={uniqueImagesCount}
                 onOpenLatexHelper={handleOpenLatexHelper}
+                onOpenInsertImageModal={handleOpenInsertImageModal}
                 relevantChapters={relevantChapters}
                 onOpenImageStorageSettings={() => setIsImageStorageSettingsOpen(true)}
                 imageStorageConfig={imageStorageConfig}
@@ -2391,6 +2555,20 @@ export default function QuizEditor(props: QuizEditorProps) {
                 onConfigChanged={() => {
                     setImageStorageConfig(getImageStorageConfig());
                 }}
+            />
+
+            {/* Modal Chèn Hình Ảnh Trực Tiếp vào Lời dẫn / Câu hỏi (hỗ trợ 1 hoặc nhiều ảnh, xếp cạnh nhau) */}
+            <InsertImageModal
+                isOpen={isInsertImageModalOpen}
+                onClose={() => {
+                    setIsInsertImageModalOpen(false);
+                    setInsertImageTargetQId(null);
+                }}
+                targetField={insertImageTargetField}
+                targetQuestionId={insertImageTargetQId}
+                targetQuestionLabel={insertImageTargetLabel}
+                questions={props.questions}
+                onInsert={handleInsertImageToField}
             />
         </div>
     );

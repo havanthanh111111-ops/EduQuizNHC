@@ -642,8 +642,8 @@ export default function QuizPreviewModal({ quiz, onClose, isAdmin = true }: Quiz
                                                     <LatexText text={q.text}/>
                                                 </p>
 
-                                                {/* Ảnh đính kèm nếu có */}
-                                                {q.imageUrl && (
+                                                {/* Ảnh đính kèm nếu có (chỉ hiện khi chưa được chèn inline trong nội dung câu hoặc lời dẫn) */}
+                                                {q.imageUrl && !q.text?.includes(q.imageUrl) && !(q.context && q.context.includes(q.imageUrl)) && (
                                                     <div 
                                                         className="q-image-container" 
                                                         style={{ 
