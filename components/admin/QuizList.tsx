@@ -6,7 +6,7 @@ import {
   CheckSquare, Square, Zap, Globe, Clock, FileEdit, AlertTriangle, Check,
   FileCode, Loader2, Calendar, Folder, FolderPlus, FolderTree, FolderInput,
   ArrowLeft, ChevronRight, BookOpen, Layers, Sparkles, LayoutGrid, List, Plus,
-  CheckCircle2, FolderX, X, Send, MessageSquare, Share2
+  CheckCircle2, FolderX, X, Send, MessageSquare, Share2, Pencil, Presentation
 } from 'lucide-react';
 import QuickAssignModal from './QuickAssignModal';
 import FolderModal from './FolderModal';
@@ -32,6 +32,7 @@ interface QuizListProps {
     onSaveFolder?: (folder: QuizFolder) => Promise<void> | void;
     onDeleteFolder?: (id: string) => Promise<void> | void;
     onBatchMoveToFolder?: (quizIds: string[], folderId?: string, folderName?: string, chapterName?: string) => Promise<void>;
+    onOpenReviewBoard?: (quizId: string) => void;
     qSearch: string;
     setQSearch: React.Dispatch<React.SetStateAction<string>> | ((val: string) => void);
     qAcademicYearFilter?: string;
@@ -58,6 +59,7 @@ export default function QuizList({
     onSaveFolder,
     onDeleteFolder,
     onBatchMoveToFolder,
+    onOpenReviewBoard,
     qSearch, setQSearch, qGradeFilter, setQGradeFilter,
     qChapterFilter, setQChapterFilter,
     qAcademicYearFilter = 'all',
@@ -1225,6 +1227,16 @@ export default function QuizList({
                                                 <Eye size={12} />
                                                 <span>Xem trước</span>
                                             </button>
+                                            {onOpenReviewBoard && (
+                                                <button
+                                                    onClick={() => onOpenReviewBoard(q.id)}
+                                                    className="px-2.5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-1 transition-all cursor-pointer shadow-xs"
+                                                    title="Mở Không gian Sửa bài trực tiếp trên bảng cho học sinh"
+                                                >
+                                                    <Pencil size={11} />
+                                                    <span>Sửa Bảng</span>
+                                                </button>
+                                            )}
                                             <button
                                                 onClick={(e) => handleOpenZaloNotice(q, e)}
                                                 className="px-2.5 py-2 bg-sky-50 hover:bg-sky-600 text-sky-700 hover:text-white border border-sky-200 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-1 transition-all cursor-pointer shadow-2xs"
