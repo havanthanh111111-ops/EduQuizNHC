@@ -6,6 +6,7 @@ import QuizTaker from './QuizTaker';
 import QuickPractice from './QuickPractice';
 import ResultDetailModal from './admin/ResultDetailModal';
 import QuizPreviewModal from './admin/QuizPreviewModal';
+import QuizProgressIndicator, { countCompletedQuestions } from './QuizProgressIndicator';
 import { 
   Clock, Trophy, BookOpen, Eye, Medal, History, ChevronRight, Star, Award, Users, X, 
   Loader2, RefreshCw, Zap, ShieldAlert, Calendar, Lock, FileText, CheckCircle2, ChevronDown, ChevronUp,
@@ -382,6 +383,31 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
         accumulatedPoints: effortPoints + bonusPoints
     };
   }, [results, officialAvgScore, avgSubmittedScore, completedAssignedCount, assignedQuizzes.length, uncompletedAssignedCount]);
+
+  // Thống kê tổng số câu hỏi đã làm trên tổng số câu hỏi của các đề
+  const overallQuestionsStats = useMemo(() => {
+    let totalQuestions = 0;
+    let completedQuestions = 0;
+
+    const targetList = assignedQuizzes.length > 0 ? assignedQuizzes : quizzes;
+    targetList.forEach(q => {
+      const qTotal = q.questionCount || (q.questions ? q.questions.length : 0);
+      totalQuestions += qTotal;
+      const qAttempts = results.filter(r => r.quizId === q.id).sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+      if (qAttempts.length > 0) {
+        const latest = qAttempts[0];
+        const done = countCompletedQuestions(latest.userAnswers, qTotal) || (latest.score > 0 ? qTotal : 0);
+        completedQuestions += done;
+      }
+    });
+
+    const percentage = totalQuestions > 0 ? Math.min(100, Math.round((completedQuestions / totalQuestions) * 100)) : 0;
+    return {
+      completed: completedQuestions,
+      total: totalQuestions,
+      percentage
+    };
+  }, [assignedQuizzes, quizzes, results]);
 
   // Recharts Chart State & Computations
   const [chartType, setChartType] = useState<'timeline' | 'distribution'>('timeline');
@@ -777,8 +803,8 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
           </section>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className={`bg-white rounded-[2rem] p-8 border shadow-sm flex items-center gap-5 transition-transform hover:scale-105 ${stats.uncompletedAssignedCount > 0 ? 'border-amber-300' : 'border-slate-200'}`}>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className={`bg-white rounded-[2rem] p-6 sm:p-8 border shadow-sm flex items-center gap-5 transition-transform hover:scale-105 ${stats.uncompletedAssignedCount > 0 ? 'border-amber-300' : 'border-slate-200'}`}>
             <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 shadow-inner ${stats.avgScore >= 8 ? 'bg-emerald-50 text-emerald-600' : stats.avgScore >= 5 ? 'bg-blue-50 text-blue-600' : 'bg-rose-50 text-rose-600'}`}>
               <Trophy size={28} />
             </div>
@@ -794,7 +820,8 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
               </span>
             </div>
         </div>
-        <div className="bg-white rounded-[2rem] p-8 border shadow-sm flex items-center gap-5 transition-transform hover:scale-105">
+
+        <div className="bg-white rounded-[2rem] p-6 sm:p-8 border shadow-sm flex items-center gap-5 transition-transform hover:scale-105">
             <div className="w-14 h-14 bg-purple-50 text-purple-600 rounded-2xl flex items-center justify-center shrink-0 shadow-inner"><BookOpen size={28} /></div>
             <div>
               <p className="text-slate-400 text-[10px] font-black uppercase">Tiến độ bài giao</p>
@@ -806,7 +833,34 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
               </span>
             </div>
         </div>
-        <div className="bg-white rounded-[2rem] p-8 border shadow-sm flex items-center gap-5 transition-transform hover:scale-105">
+
+        <div className="bg-white rounded-[2rem] p-6 sm:p-8 border shadow-sm flex flex-col justify-between gap-3 transition-transform hover:scale-105">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center shrink-0 shadow-inner">
+                <CheckCircle2 size={28} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-slate-400 text-[10px] font-black uppercase">Tiến độ câu hỏi</p>
+                <h3 className="text-2xl font-black text-slate-800 tracking-tight">
+                  {overallQuestionsStats.completed}/{overallQuestionsStats.total} <span className="text-xs font-bold text-slate-400">câu</span>
+                </h3>
+              </div>
+            </div>
+            <div className="w-full">
+              <div className="flex justify-between items-center text-[9px] font-black uppercase mb-1.5">
+                <span className="text-slate-400">Tỷ lệ hoàn thành</span>
+                <span className="text-emerald-600 font-extrabold">{overallQuestionsStats.percentage}%</span>
+              </div>
+              <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200/80 p-0.5">
+                <div
+                  className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all duration-700 ease-out"
+                  style={{ width: `${overallQuestionsStats.percentage}%` }}
+                />
+              </div>
+            </div>
+        </div>
+
+        <div className="bg-white rounded-[2rem] p-6 sm:p-8 border shadow-sm flex items-center gap-5 transition-transform hover:scale-105">
             <div className="w-14 h-14 bg-orange-50 text-orange-600 rounded-2xl flex items-center justify-center shrink-0 shadow-inner"><Clock size={28} /></div>
             <div>
               <p className="text-slate-400 text-[10px] font-black uppercase">TG luyện tập & Tích lũy</p>
@@ -1187,11 +1241,14 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
                               }
                           }
                           
-                          const myAttempts = results.filter(r => r.quizId === q.id);
+                          const myAttempts = results.filter(r => r.quizId === q.id).sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
                           const attemptCount = myAttempts.length;
                           const maxAttempts = q.maxAttempts ?? 2;
                           const isFrozen = attemptCount >= maxAttempts;
                           const bestScore = attemptCount > 0 ? Math.max(...myAttempts.map(r => r.score)) : null;
+                          const latestAttempt = myAttempts[0];
+                          const totalQuestions = q.questionCount || (q.questions ? q.questions.length : (latestAttempt?.totalQuestions || 0));
+                          const completedQuestions = latestAttempt ? (countCompletedQuestions(latestAttempt.userAnswers, totalQuestions) || (latestAttempt.score > 0 ? totalQuestions : 0)) : 0;
 
                           return (
                               <div key={q.id} className={`bg-white rounded-[1.5rem] border p-6 flex flex-col transition-all border-b-4 ${isFrozen ? 'border-emerald-500 shadow-sm' : (isEnded ? 'border-slate-300 opacity-60' : (isStarted ? 'border-blue-600 shadow-xl' : 'border-slate-200 opacity-75'))}`}>
@@ -1225,6 +1282,15 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
                                           )}
                                       </div>
                                   )}
+
+                                  {/* Chỉ báo tiến độ trực quan: Số câu đã làm / tổng số câu của đề */}
+                                  <div className="mb-3.5">
+                                      <QuizProgressIndicator
+                                          completed={completedQuestions}
+                                          total={totalQuestions}
+                                          variant="card"
+                                      />
+                                  </div>
 
                                   {/* Thống kê số lần làm bài */}
                                   <div className="bg-slate-50 rounded-xl p-2.5 grid grid-cols-2 gap-2 mb-4 text-center border border-slate-100">
@@ -1307,6 +1373,12 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
                       return { count: attempts.length, max: Math.max(...attempts.map(r => r.score)) };
                     };
                     const qs = qStats(q.id);
+
+                    const pAttempts = results.filter(r => r.quizId === q.id).sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+                    const latestPAttempt = pAttempts[0];
+                    const pTotalQuestions = q.questionCount || (q.questions ? q.questions.length : (latestPAttempt?.totalQuestions || 0));
+                    const pCompletedQuestions = latestPAttempt ? (countCompletedQuestions(latestPAttempt.userAnswers, pTotalQuestions) || (latestPAttempt.score > 0 ? pTotalQuestions : 0)) : 0;
+
                     return (
                       <div key={q.id} className={`bg-white rounded-[1.5rem] border border-slate-200 p-6 flex flex-col transition-all border-b-4 ${status.isLocked ? 'opacity-75 grayscale' : 'hover:shadow-xl hover:-translate-y-1 group hover:border-b-amber-500'}`}>
                         <div className="flex justify-between items-start mb-3">
@@ -1328,10 +1400,20 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
                             </div>
                         ) : (
                             <>
-                                <div className="bg-amber-50/40 rounded-xl p-3 grid grid-cols-2 gap-2 mb-6 text-center border border-amber-100/60">
+                                <div className="bg-amber-50/40 rounded-xl p-3 grid grid-cols-2 gap-2 mb-3 text-center border border-amber-100/60">
                                     <div><p className="text-[7px] font-black text-slate-400 uppercase mb-0.5">Lượt luyện</p><p className="text-xs font-black text-slate-700">{qs?.count || 0}</p></div>
                                     <div><p className="text-[7px] font-black text-amber-600 uppercase mb-0.5">Điểm Max</p><p className="text-xs font-black text-amber-700">{qs ? qs.max.toFixed(1) : '-'}</p></div>
                                 </div>
+
+                                {/* Chỉ báo tiến độ câu hỏi đã hoàn thành */}
+                                <div className="mb-4">
+                                    <QuizProgressIndicator
+                                        completed={pCompletedQuestions}
+                                        total={pTotalQuestions}
+                                        variant="card"
+                                    />
+                                </div>
+
                                 <div className="grid grid-cols-2 gap-2 mt-auto">
                                   {/* Nút Luyện tập hoạt động bình thường */}
                                   <button onClick={() => handleStartPractice(q)} className="flex items-center justify-center gap-1.5 bg-slate-900 text-white py-2.5 rounded-xl text-[9px] font-black uppercase hover:bg-black transition-all shadow-md active:scale-95">
@@ -1435,6 +1517,7 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
                       <tr className="bg-slate-50 border-b text-[9px] font-black uppercase tracking-widest text-slate-400">
                           <th className="p-6">Tên đề thi & Trạng thái</th>
                           <th className="p-6 text-center">Phân loại</th>
+                          <th className="p-6 text-center">Tiến độ câu hỏi</th>
                           <th className="p-6 text-center">Thời điểm nộp</th>
                           <th className="p-6 text-center">Kết quả</th>
                           <th className="p-6 text-center">Hành động</th>
@@ -1443,6 +1526,8 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
                   <tbody className="divide-y">
                       {filteredResults.slice(0, resultsDisplayCount).map((r) => {
                           const quiz = r.quiz;
+                          const rowTotal = r.totalQuestions || quiz?.questionCount || 0;
+                          const rowCompleted = countCompletedQuestions(r.userAnswers, rowTotal) || (r.score > 0 ? rowTotal : 0);
                           return (
                               <tr key={r.id} className="hover:bg-slate-50/80 transition-colors group">
                                   <td className="p-6">
@@ -1487,6 +1572,13 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
                                       }`}>
                                           {quiz?.type === 'test' ? 'Đề thi định kỳ' : 'Luyện tập tự do'}
                                       </span>
+                                  </td>
+                                  <td className="p-6 text-center">
+                                      <QuizProgressIndicator
+                                          completed={rowCompleted}
+                                          total={rowTotal}
+                                          variant="table"
+                                      />
                                   </td>
                                   <td className="p-6 text-center">
                                       <p className="text-xs font-bold text-slate-700">
