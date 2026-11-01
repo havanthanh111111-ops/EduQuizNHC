@@ -215,7 +215,7 @@ export default function AdminDashboard() {
           getClasses(forceRefresh),
           getUsers(forceRefresh),
           getQuizzesMetadata('all', forceRefresh),
-          getResultsMetadata('all', 10000, forceRefresh),
+          getResultsMetadata('all', 2000, forceRefresh),
           getChapters(forceRefresh)
         ]);
         setClasses(cls);
@@ -226,7 +226,7 @@ export default function AdminDashboard() {
       } else if (tab === 'students') {
         const [paged, r, q, cls] = await Promise.all([
           getUsersPage(1, 50),
-          getResultsMetadata('all', 10000, forceRefresh),
+          getResultsMetadata('all', 2000, forceRefresh),
           getQuizzesMetadata('all', forceRefresh),
           getClasses(forceRefresh)
         ]);
