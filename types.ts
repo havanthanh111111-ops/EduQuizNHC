@@ -36,6 +36,17 @@ export interface Chapter {
   order: number;
 }
 
+export interface Lesson {
+  id: string;
+  grade: Grade;
+  chapterId: string;
+  chapterName: string;
+  title: string; // Tên bài học (VD: "Bài 13: Tổng hợp và phân tích lực")
+  url: string;   // Đường dẫn web bài học
+  defaultKeyConcept?: string; // Khung kiến thức trọng tâm / công thức cốt lõi mặc định
+}
+
+
 export interface QuizFolder {
   id: string;
   name: string; // e.g. "Đề củng cố Bài học", "Đề ôn chương", "Đề tổng hợp"

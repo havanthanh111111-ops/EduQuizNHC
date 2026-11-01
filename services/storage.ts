@@ -2,7 +2,7 @@
 /// <reference types="vite/client" />
 
 import { createClient } from '@supabase/supabase-js';
-import { User, Quiz, Result, Chapter, QuizFolder, Question, QuestionType, ExamSession, PublishedResult, Grade, ClassRoom } from '../types';
+import { User, Quiz, Result, Chapter, Lesson, QuizFolder, Question, QuestionType, ExamSession, PublishedResult, Grade, ClassRoom } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
 let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://buelyuxsztnhrwinrldp.supabase.co').trim();
@@ -1088,6 +1088,113 @@ export const deleteChapter = async (id: string): Promise<void> => {
   invalidateCache('chapters_all');
   if (supabase) await supabase.from('chapters').delete().eq('id', id);
 };
+
+// --- Lessons (Quản lý bài học thuộc chương) ---
+export const getLessons = async (forceRefresh: boolean = false): Promise<Lesson[]> => {
+  const cacheKey = 'lessons_all';
+  const now = Date.now();
+  if (!forceRefresh && memoryCache[cacheKey] && memoryCache[cacheKey].expires > now) {
+    return memoryCache[cacheKey].data;
+  }
+
+  const fetchPromise = async (): Promise<Lesson[]> => {
+    let dbLessons: Lesson[] = [];
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.from('lessons').select('data');
+        if (!error && data && data.length > 0) {
+          dbLessons = data.map((row: any) => row.data as Lesson);
+        }
+      } catch (e) {
+        console.warn("Chưa đọc được bảng lessons trên Supabase, fallback sang localStorage:", e);
+      }
+    }
+    if (dbLessons.length === 0) {
+      try {
+        const local = localStorage.getItem('eduquiz_lessons_cache');
+        if (local) dbLessons = JSON.parse(local);
+      } catch (e) {}
+    }
+    memoryCache[cacheKey] = { data: dbLessons, expires: Date.now() + CACHE_TTL };
+    try {
+      localStorage.setItem('eduquiz_lessons_cache', JSON.stringify(dbLessons));
+    } catch (e) {}
+    return dbLessons;
+  };
+
+  const cached = memoryCache[cacheKey]?.data || [];
+  return withTimeout(fetchPromise(), 5000, cached);
+};
+
+export const saveLesson = async (l: Lesson): Promise<void> => {
+  invalidateCache('lessons_all');
+  try {
+    const list = await getLessons(true);
+    const idx = list.findIndex(item => item.id === l.id);
+    if (idx >= 0) list[idx] = l;
+    else list.push(l);
+    localStorage.setItem('eduquiz_lessons_cache', JSON.stringify(list));
+  } catch (e) {}
+
+  if (supabase) {
+    try {
+      await supabase.from('lessons').upsert({
+        id: l.id,
+        grade: l.grade,
+        chapter_id: l.chapterId,
+        data: l
+      });
+    } catch (e) {
+      console.warn("Lưu lessons vào Supabase:", e);
+    }
+  }
+};
+
+export const deleteLesson = async (id: string): Promise<void> => {
+  invalidateCache('lessons_all');
+  try {
+    const list = await getLessons(true);
+    const updated = list.filter(item => item.id !== id);
+    localStorage.setItem('eduquiz_lessons_cache', JSON.stringify(updated));
+  } catch (e) {}
+
+  if (supabase) {
+    try {
+      await supabase.from('lessons').delete().eq('id', id);
+    } catch (e) {
+      console.warn("Xóa lesson trên Supabase:", e);
+    }
+  }
+};
+
+export const saveLessonsBatch = async (lessonsList: Lesson[]): Promise<void> => {
+  invalidateCache('lessons_all');
+  if (lessonsList.length === 0) return;
+  try {
+    const current = await getLessons(true);
+    const map = new Map<string, Lesson>();
+    current.forEach(l => map.set(l.id, l));
+    lessonsList.forEach(l => map.set(l.id, l));
+    const merged = Array.from(map.values());
+    localStorage.setItem('eduquiz_lessons_cache', JSON.stringify(merged));
+  } catch (e) {}
+
+  if (supabase) {
+    try {
+      const payload = lessonsList.map(l => ({
+        id: l.id,
+        grade: l.grade,
+        chapter_id: l.chapterId,
+        data: l
+      }));
+      await supabase.from('lessons').upsert(payload);
+    } catch (e) {
+      console.warn("Lưu batch lessons vào Supabase:", e);
+    }
+  }
+};
+
+
 
 // --- Quiz Folders (Thư mục đề thi con trong từng Chương) ---
 // Dữ liệu được lưu trữ 100% trên Supabase Server (Single Source of Truth)

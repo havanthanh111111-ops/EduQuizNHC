@@ -744,53 +744,6 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
     });
   }, [quizzes, gradeFilter, chapterFilter, academicYearFilter, user.classId, currentAcademicYear]);
 
-  // Bộ lọc và hiển thị danh sách các đề đã làm ở phía dưới
-  const [resultsFilter, setResultsFilter] = useState<'all' | 'expired' | 'active'>('all');
-  const [resultsDisplayCount, setResultsDisplayCount] = useState(15);
-
-  const enrichedResults = useMemo(() => {
-    return results.map(r => {
-      const quiz = quizzes.find(q => q.id === r.quizId);
-      const isExpired = quiz ? isQuizExpired(quiz, currentTime) : true;
-      const sameQuizAttempts = results
-        .filter(item => item.quizId === r.quizId)
-        .sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime());
-      const attemptIndex = sameQuizAttempts.findIndex(item => item.id === r.id);
-      const attemptNumber = attemptIndex >= 0 ? attemptIndex + 1 : 1;
-      const hasMultipleAttempts = sameQuizAttempts.length > 1;
-
-      return {
-        ...r,
-        quiz,
-        isExpired,
-        attemptNumber,
-        hasMultipleAttempts,
-        maxAttempts: quiz?.maxAttempts ?? (quiz?.type === 'practice' ? 99 : 2)
-      };
-    });
-  }, [results, quizzes, currentTime, isQuizExpired]);
-
-  const filteredResults = useMemo(() => {
-    if (resultsFilter === 'expired') {
-      return enrichedResults.filter(item => item.isExpired);
-    }
-    if (resultsFilter === 'active') {
-      return enrichedResults.filter(item => !item.isExpired);
-    }
-    return enrichedResults;
-  }, [enrichedResults, resultsFilter]);
-
-  const expiredResultsCount = useMemo(() => enrichedResults.filter(r => r.isExpired).length, [enrichedResults]);
-  const activeResultsCount = useMemo(() => enrichedResults.filter(r => !r.isExpired).length, [enrichedResults]);
-
-  if (activeQuiz) {
-    return <QuizTaker quiz={activeQuiz} student={user} onExit={handleExitQuiz} />;
-  }
-
-  if (activePracticeQuiz) {
-    return <QuickPractice quiz={activePracticeQuiz} student={user} onExit={handleExitQuiz} />;
-  }
-
   // Helper tính toán thời gian mở đề & thông tin làm bài của riêng học sinh này
   const getQuizTiming = useCallback((q: Quiz) => {
     const startX = q.startTime ? new Date(q.startTime) : null;
@@ -864,6 +817,53 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
   const practiceQuizzes = useMemo(() => {
     return filteredQuizzes.filter(q => q.type === 'practice' && !isQuizExpired(q, currentTime));
   }, [filteredQuizzes, currentTime, isQuizExpired]);
+
+  // Bộ lọc và hiển thị danh sách các đề đã làm ở phía dưới
+  const [resultsFilter, setResultsFilter] = useState<'all' | 'expired' | 'active'>('all');
+  const [resultsDisplayCount, setResultsDisplayCount] = useState(15);
+
+  const enrichedResults = useMemo(() => {
+    return results.map(r => {
+      const quiz = quizzes.find(q => q.id === r.quizId);
+      const isExpired = quiz ? isQuizExpired(quiz, currentTime) : true;
+      const sameQuizAttempts = results
+        .filter(item => item.quizId === r.quizId)
+        .sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime());
+      const attemptIndex = sameQuizAttempts.findIndex(item => item.id === r.id);
+      const attemptNumber = attemptIndex >= 0 ? attemptIndex + 1 : 1;
+      const hasMultipleAttempts = sameQuizAttempts.length > 1;
+
+      return {
+        ...r,
+        quiz,
+        isExpired,
+        attemptNumber,
+        hasMultipleAttempts,
+        maxAttempts: quiz?.maxAttempts ?? (quiz?.type === 'practice' ? 99 : 2)
+      };
+    });
+  }, [results, quizzes, currentTime, isQuizExpired]);
+
+  const filteredResults = useMemo(() => {
+    if (resultsFilter === 'expired') {
+      return enrichedResults.filter(item => item.isExpired);
+    }
+    if (resultsFilter === 'active') {
+      return enrichedResults.filter(item => !item.isExpired);
+    }
+    return enrichedResults;
+  }, [enrichedResults, resultsFilter]);
+
+  const expiredResultsCount = useMemo(() => enrichedResults.filter(r => r.isExpired).length, [enrichedResults]);
+  const activeResultsCount = useMemo(() => enrichedResults.filter(r => !r.isExpired).length, [enrichedResults]);
+
+  if (activeQuiz) {
+    return <QuizTaker quiz={activeQuiz} student={user} onExit={handleExitQuiz} />;
+  }
+
+  if (activePracticeQuiz) {
+    return <QuickPractice quiz={activePracticeQuiz} student={user} onExit={handleExitQuiz} />;
+  }
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-10 pb-20">

@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo } from 'react';
-import { Quiz, Question, Grade, QuestionType, Chapter, QuizType, ClassRoom, QuizFolder } from '../../types';
+import { Quiz, Question, Grade, QuestionType, Chapter, QuizType, ClassRoom, QuizFolder, Lesson } from '../../types';
 import { 
   Save, FileUp, Database, CheckCircle2, HelpCircle, AlignLeft, Trash2, 
   Target as TargetIcon, Plus, ImageIcon, Loader2, Lightbulb, Eye, ImageMinus, 
@@ -77,6 +77,8 @@ interface QuizEditorProps {
     isAiLoading?: boolean;
     onCancel?: () => void;
     onResetQuiz?: () => void;
+    lessons?: Lesson[];
+    onSaveLesson?: (lesson: Lesson) => Promise<void> | void;
 }
 
 const safeParseScore = (val: any): number => {
@@ -109,6 +111,9 @@ interface QuestionSectionProps {
     solvingQId?: string | null;
     isSolvingBatch?: boolean;
     onOpenInsertImageModal?: (qId: string, field: 'context' | 'text' | 'solution', label?: string) => void;
+    lessons?: Lesson[];
+    onSaveLesson?: (lesson: Lesson) => Promise<void> | void;
+    quizGrade?: Grade;
 }
 
 const QuestionSection: React.FC<QuestionSectionProps> = ({ 
@@ -131,7 +136,10 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
     onBatchSolveSection,
     solvingQId,
     isSolvingBatch,
-    onOpenInsertImageModal
+    onOpenInsertImageModal,
+    lessons = [],
+    onSaveLesson,
+    quizGrade = '10'
 }) => {
     const [quickPoints, setQuickPoints] = useState(type === 'mcq' ? "0.25" : "1.0");
     const [copiedUrlQId, setCopiedUrlQId] = useState<string | null>(null);
@@ -955,6 +963,93 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
 
                             {/* Cột 2: Gắn Link bài học Vercel & Tên bài */}
                             <div className="space-y-3">
+                                {/* Hộp chọn nhanh bài học từ Thư viện đã lưu */}
+                                <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-2xl space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <label className="text-[10px] font-black text-blue-900 uppercase flex items-center gap-1.5">
+                                            <BookOpen size={13} className="text-blue-600" />
+                                            <span>Chọn bài học đã lưu (Khỏi copy link):</span>
+                                        </label>
+                                        {lessons.length > 0 && (
+                                            <span className="text-[9px] font-bold text-blue-700 bg-blue-100/80 px-2 py-0.5 rounded-md">
+                                                {lessons.length} bài có sẵn
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    <select
+                                        className="w-full px-3 py-2 bg-white border-2 border-blue-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-blue-600 transition-all cursor-pointer"
+                                        value={lessons.find(l => l.url === q.lessonUrl || (q.lessonTitle && l.title === q.lessonTitle))?.id || ''}
+                                        onChange={e => {
+                                            const chosenId = e.target.value;
+                                            if (!chosenId) return;
+                                            const chosen = lessons.find(l => l.id === chosenId);
+                                            if (chosen) {
+                                                const nl = [...questions];
+                                                const i = nl.findIndex(x => x.id === q.id);
+                                                if (i !== -1) {
+                                                    nl[i].lessonTitle = chosen.title;
+                                                    nl[i].lessonUrl = chosen.url;
+                                                    if (!nl[i].keyConcept && chosen.defaultKeyConcept) {
+                                                        nl[i].keyConcept = chosen.defaultKeyConcept;
+                                                    }
+                                                    setQuestions(nl);
+                                                }
+                                            }
+                                        }}
+                                    >
+                                        <option value="">-- Bấm để chọn bài học thuộc chương ({lessons.length} bài) --</option>
+                                        {/* Gom nhóm bài học theo Khối & Chương */}
+                                        {Array.from(new Set(lessons.map(l => `Khối ${l.grade} • ${l.chapterName}`))).map(groupKey => {
+                                            const groupLessons = lessons.filter(l => `Khối ${l.grade} • ${l.chapterName}` === groupKey);
+                                            return (
+                                                <optgroup key={groupKey} label={groupKey}>
+                                                    {groupLessons.map(l => (
+                                                        <option key={l.id} value={l.id}>
+                                                            {l.title}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            );
+                                        })}
+                                    </select>
+
+                                    {/* Trạng thái liên kết */}
+                                    {q.lessonUrl && (
+                                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200 truncate max-w-[260px]">
+                                                <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                                                <span className="truncate">Đã liên kết: {q.lessonTitle || 'Bài học'}</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setPreviewLesson({ url: q.lessonUrl!, title: q.lessonTitle })}
+                                                    className="text-[9px] font-black uppercase text-blue-600 hover:text-blue-800 flex items-center gap-1 hover:underline"
+                                                >
+                                                    <ExternalLink size={10} />
+                                                    <span>Xem thử</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const nl = [...questions];
+                                                        const i = nl.findIndex(x => x.id === q.id);
+                                                        if (i !== -1) {
+                                                            nl[i].lessonTitle = undefined;
+                                                            nl[i].lessonUrl = undefined;
+                                                            setQuestions(nl);
+                                                        }
+                                                    }}
+                                                    className="text-[9px] font-bold text-red-600 hover:underline"
+                                                >
+                                                    Gỡ link
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
                                 <div>
                                     <label className="text-[10px] font-black text-blue-900 uppercase block mb-1">
                                         Tên bài học liên quan:
@@ -1003,6 +1098,33 @@ const QuestionSection: React.FC<QuestionSectionProps> = ({
                                         )}
                                     </div>
                                 </div>
+
+                                {/* Nút lưu nhanh bài học mới vào Danh mục nếu chưa có trong lessons */}
+                                {q.lessonTitle && q.lessonUrl && onSaveLesson && !lessons.some(l => l.url === q.lessonUrl) && (
+                                    <div className="pt-1">
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                const newLesson: Lesson = {
+                                                    id: uuidv4(),
+                                                    grade: quizGrade,
+                                                    chapterId: q.chapterId || `ch_${quizGrade}`,
+                                                    chapterName: q.chapterName || `Chương Khối ${quizGrade}`,
+                                                    title: q.lessonTitle!,
+                                                    url: q.lessonUrl!,
+                                                    defaultKeyConcept: q.keyConcept
+                                                };
+                                                await onSaveLesson(newLesson);
+                                                alert(`Đã lưu "${newLesson.title}" vào Danh mục bài học để dùng lại cho các câu khác!`);
+                                            }}
+                                            className="w-full py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-center gap-1.5"
+                                            title="Lưu bài học này vào menu Bài học để các câu sau có thể chọn ngay"
+                                        >
+                                            <Plus size={12} />
+                                            <span>Lưu bài này vào Thư viện bài học</span>
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -2637,6 +2759,9 @@ export default function QuizEditor(props: QuizEditorProps) {
                 onBatchSolveSection={() => handleBatchSolveSection('mcq')}
                 solvingQId={solvingQId}
                 isSolvingBatch={isSolvingBatchSection === 'mcq'}
+                lessons={props.lessons}
+                onSaveLesson={props.onSaveLesson}
+                quizGrade={props.grade}
             />
             <QuestionSection 
                 sectionTitle="PHẦN II. TRẮC NGHIỆM ĐÚNG SAI" 
@@ -2659,6 +2784,9 @@ export default function QuizEditor(props: QuizEditorProps) {
                 onBatchSolveSection={() => handleBatchSolveSection('group-tf')}
                 solvingQId={solvingQId}
                 isSolvingBatch={isSolvingBatchSection === 'group-tf'}
+                lessons={props.lessons}
+                onSaveLesson={props.onSaveLesson}
+                quizGrade={props.grade}
             />
             <QuestionSection 
                 sectionTitle="PHẦN III. TRẢ LỜI NGẮN" 
@@ -2681,6 +2809,9 @@ export default function QuizEditor(props: QuizEditorProps) {
                 onBatchSolveSection={() => handleBatchSolveSection('short')}
                 solvingQId={solvingQId}
                 isSolvingBatch={isSolvingBatchSection === 'short'}
+                lessons={props.lessons}
+                onSaveLesson={props.onSaveLesson}
+                quizGrade={props.grade}
             />
 
             {/* Modal Quản lý và Tái sử dụng kho ảnh đề thi */}

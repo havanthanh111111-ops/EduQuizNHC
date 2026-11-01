@@ -4,6 +4,7 @@ import {
   getUsers, saveUser, deleteUser, changePassword, getUsersPage, saveUsersBatch,
   getResultsMetadata, getResultById, deleteResult, getResultsMetadataPage,
   getChapters, saveChapter, deleteChapter,
+  getLessons, saveLesson, deleteLesson, saveLessonsBatch,
   getQuizFolders, saveQuizFolder, deleteQuizFolder, batchMoveQuizzesToFolder,
   getBankQuestions, getBankQuestionsPage, saveBankQuestion, deleteBankQuestion,
   getClasses, saveClass, deleteClass, saveClassesBatch, assignStudentsToClass,
@@ -20,13 +21,14 @@ import {
 } from '../../services/storage';
 import { generateQuizFromPrompt, parseQuestionsFromPDF, parseQuestionsFromText } from '../../services/gemini';
 import { normalizeFullText } from '../../services/vietnameseFixer';
-import { Quiz, User, Result, Chapter, Question, QuestionType, Grade, QuizType, Role, ClassRoom, QuizFolder } from '../../types';
+import { Quiz, User, Result, Chapter, Question, QuestionType, Grade, QuizType, Role, ClassRoom, QuizFolder, Lesson } from '../../types';
 import { v4 as uuidv4 } from 'uuid';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Papa from 'papaparse';
 import { 
   LayoutDashboard, Users, BarChart3, ShieldAlert, Sparkles, FolderTree, 
-  Plus, Database, Loader2, X, RefreshCw, AlertTriangle, FileUp, DatabaseZap, GraduationCap
+  Plus, Database, Loader2, X, RefreshCw, AlertTriangle, FileUp, DatabaseZap, GraduationCap,
+  BookOpen
 } from 'lucide-react';
 
 import QuizList, { QuizStatusFilter } from './QuizList';
@@ -35,6 +37,7 @@ import StudentManager from './StudentManager';
 import ResultsBoard from './ResultsBoard';
 import ExamMonitor from './ExamMonitor';
 import ChapterManager from './ChapterManager';
+import LessonManager from './LessonManager';
 import QuestionBank from './QuestionBank';
 import AIRenderer from './AIRenderer';
 import ClassManager from './ClassManager';
@@ -48,7 +51,7 @@ import QuizPreviewModal from './QuizPreviewModal';
 import SyncBankModal from './SyncBankModal';
 import { Presentation, Tv, Pencil } from 'lucide-react';
 
-type AdminTab = 'quizzes' | 'classes' | 'students' | 'results' | 'monitor' | 'chapters' | 'bank' | 'ai' | 'review';
+type AdminTab = 'quizzes' | 'classes' | 'students' | 'results' | 'monitor' | 'chapters' | 'lessons' | 'bank' | 'ai' | 'review';
 
 const SESSION_KEY_QUIZ_FILTERS = 'eduquiz_admin_quiz_filters_v6';
 
@@ -167,6 +170,7 @@ export default function AdminDashboard() {
   const [resultsTotal, setResultsTotal] = useState(0);
   const [resultsPage, setResultsPage] = useState(1);
   const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [lessons, setLessons] = useState<Lesson[]>([]);
   const [folders, setFolders] = useState<QuizFolder[]>([]);
   const [bankQuestions, setBankQuestions] = useState<Question[]>([]);
   const [bankTotal, setBankTotal] = useState(0);
@@ -180,11 +184,12 @@ export default function AdminDashboard() {
     try {
       if (tab === 'quizzes') {
         const initialGrade = qGradeFilterRef.current !== 'all' ? qGradeFilterRef.current : undefined;
-        const [q, c, cls, fld] = await Promise.all([
+        const [q, c, cls, fld, l] = await Promise.all([
           getQuizzesMetadata(initialGrade, forceRefresh), 
           getChapters(forceRefresh),
           getClasses(forceRefresh),
-          getQuizFolders('all', forceRefresh)
+          getQuizFolders('all', forceRefresh),
+          getLessons(forceRefresh)
         ]);
         if (q && q.length > 0) {
           setQuizzes(q);
@@ -195,6 +200,7 @@ export default function AdminDashboard() {
         setChapters(c || []);
         setClasses(cls || []);
         setFolders(fld || []);
+        setLessons(l || []);
 
         // Tự động gán chương thuộc khối mặc định nếu chưa chọn chương cụ thể
         if (c && c.length > 0 && qGradeFilterRef.current !== 'all') {
@@ -254,7 +260,18 @@ export default function AdminDashboard() {
         const c = await getChapters(forceRefresh);
         setChapters(c || []);
       } else if (tab === 'chapters') {
-        const c = await getChapters(forceRefresh);
+        const [c, l] = await Promise.all([
+          getChapters(forceRefresh),
+          getLessons(forceRefresh)
+        ]);
+        setChapters(c || []);
+        setLessons(l || []);
+      } else if (tab === 'lessons') {
+        const [l, c] = await Promise.all([
+          getLessons(forceRefresh),
+          getChapters(forceRefresh)
+        ]);
+        setLessons(l || []);
         setChapters(c || []);
       }
     } catch (e) {
@@ -263,6 +280,45 @@ export default function AdminDashboard() {
       setIsDataLoading(false);
     }
   }, []);
+
+  const handleSaveLesson = async (l: Lesson) => {
+    try {
+      await saveLesson(l);
+      setLessons(prev => {
+        const idx = prev.findIndex(item => item.id === l.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = l;
+          return next;
+        }
+        return [l, ...prev];
+      });
+      alert(`Đã lưu bài học "${l.title}" thành công!`);
+    } catch (err: any) {
+      alert("Lỗi khi lưu bài học: " + (err?.message || "Không xác định"));
+    }
+  };
+
+  const handleSaveBatchLessons = async (list: Lesson[]) => {
+    try {
+      await saveLessonsBatch(list);
+      const updated = await getLessons(true);
+      setLessons(updated);
+      alert(`Đã lưu thành công ${list.length} bài học!`);
+    } catch (err: any) {
+      alert("Lỗi khi nạp danh sách bài học: " + (err?.message || "Không xác định"));
+    }
+  };
+
+  const handleDeleteLesson = async (id: string) => {
+    try {
+      await deleteLesson(id);
+      setLessons(prev => prev.filter(item => item.id !== id));
+      alert("Đã xóa bài học thành công!");
+    } catch (err: any) {
+      alert("Lỗi khi xóa bài học: " + (err?.message || "Không xác định"));
+    }
+  };
 
   useEffect(() => {
     loadTabData(activeTab);
@@ -1391,6 +1447,7 @@ export default function AdminDashboard() {
             { id: 'results', icon: BarChart3, label: 'Bảng điểm' },
             { id: 'monitor', icon: ShieldAlert, label: 'Giám sát' },
             { id: 'chapters', icon: FolderTree, label: 'Chương' },
+            { id: 'lessons', icon: BookOpen, label: 'Bài học & Link' },
             { id: 'bank', icon: Database, label: 'Ngân hàng' },
           ].map(tab => (
             <button
@@ -1477,6 +1534,7 @@ export default function AdminDashboard() {
                     orderIndex={orderIndex} setOrderIndex={setOrderIndex}
                     startTime={startTime} setStartTime={setStartTime} endTime={endTime} setEndTime={setEndTime}
                     questions={questions} setQuestions={setQuestions} chapters={chapters} onSave={handleSaveQuiz}
+                    lessons={lessons} onSaveLesson={handleSaveLesson}
                     onCleanLabels={handleCleanLabels}
                     onOpenBank={(type) => { 
                         setBTypeFilter(type); 
@@ -1674,6 +1732,16 @@ export default function AdminDashboard() {
           {activeTab === 'monitor' && <ExamMonitor />}
           {activeTab === 'chapters' && (
             <ChapterManager chapters={chapters} onSave={async (c) => { await saveChapter(c); loadTabData('chapters'); }} onDelete={async (id) => { await deleteChapter(id); loadTabData('chapters'); }} />
+          )}
+          {activeTab === 'lessons' && (
+            <LessonManager
+              lessons={lessons}
+              chapters={chapters}
+              onSaveLesson={handleSaveLesson}
+              onSaveBatchLessons={handleSaveBatchLessons}
+              onDeleteLesson={handleDeleteLesson}
+              isLoading={isDataLoading}
+            />
           )}
           {activeTab === 'bank' && (
             <div className="space-y-6">
