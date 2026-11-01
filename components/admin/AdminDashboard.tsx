@@ -250,7 +250,7 @@ export default function AdminDashboard() {
           }
         }
       } else if (tab === 'ai') {
-        // Soạn đề AI: KHÔNG tải nội dung câu hỏi vội, chỉ tải danh mục Chương để tiết kiệm 100% băng thông!
+        // Soạn đề AI: HOÀN TOÀN KHÔNG NẠP DỮ LIỆU NGÂN HÀNG KHI MỞ MENU ĐỂ TIẾT KIỆM 100% BĂNG THÔNG!
         const c = await getChapters(forceRefresh);
         setChapters(c || []);
       } else if (tab === 'chapters') {
@@ -558,17 +558,8 @@ export default function AdminDashboard() {
     return Array.from(map.values());
   }, [bankQuestions, quizzes]);
 
-  // Khi chuyển Khối trong Ngân hàng câu hỏi (hoặc mở modal từ màn hình soạn đề), tự động tải câu hỏi khối tương ứng (có cache memory)
-  useEffect(() => {
-    if (activeTab === 'bank' || isBankOpen) {
-      const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : '10';
-      getBankQuestions(targetGrade).then(loaded => {
-        if (loaded) {
-          setBankQuestions(loaded);
-        }
-      }).catch(err => console.warn("Lỗi tải ngân hàng câu hỏi theo khối:", err));
-    }
-  }, [bGradeFilter, activeTab, isBankOpen]);
+  // Đã tối ưu hóa tải trong loadTabData tránh gọi trùng lặp
+  useEffect(() => {}, [bGradeFilter]);
 
   // Quiz Handlers
   const handleCreateQuiz = () => {
@@ -1614,7 +1605,7 @@ export default function AdminDashboard() {
                     grade={quizGrade} 
                     setGrade={setQuizGrade} 
                     chapters={chapters}
-                    bankQuestions={allAvailableQuestions}
+                    bankQuestions={[]}
                     isBankLoading={isBankLoading}
                     onLoadBank={loadBankDataIfNeeded}
                     onGenerate={handleAiGenerate}
