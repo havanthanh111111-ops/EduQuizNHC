@@ -5,7 +5,7 @@ import {
   getResultsMetadata, getResultById, deleteResult, getResultsMetadataPage,
   getChapters, saveChapter, deleteChapter,
   getQuizFolders, saveQuizFolder, deleteQuizFolder, batchMoveQuizzesToFolder,
-  getBankQuestions, saveBankQuestion, deleteBankQuestion,
+  getBankQuestions, getBankQuestionsPage, saveBankQuestion, deleteBankQuestion,
   getClasses, saveClass, deleteClass, saveClassesBatch, assignStudentsToClass,
   clearLocalCache, clearAllLocalCaches,
   isDatabaseConnected,
@@ -169,6 +169,7 @@ export default function AdminDashboard() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [folders, setFolders] = useState<QuizFolder[]>([]);
   const [bankQuestions, setBankQuestions] = useState<Question[]>([]);
+  const [bankTotal, setBankTotal] = useState(0);
   const [isBankQuestionModalOpen, setIsBankQuestionModalOpen] = useState(false);
   const [selectedBankQuestion, setSelectedBankQuestion] = useState<Question | null>(null);
 
@@ -236,7 +237,17 @@ export default function AdminDashboard() {
       } else if (tab === 'bank') {
         const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : '10';
         const [b, c] = await Promise.all([
-          getBankQuestions(targetGrade, forceRefresh),
+          getBankQuestionsPage(1, 40, targetGrade, bChapterFilter, bTypeFilter, 'all', bSearch),
+          getChapters(forceRefresh)
+        ]);
+        setBankQuestions(b.data || []);
+        setBankTotal(b.total || 0);
+        setBPage(1);
+        setChapters(c || []);
+      } else if (tab === 'ai') {
+        const targetGrade = quizGrade || '10';
+        const [b, c] = await Promise.all([
+          getBankQuestions(targetGrade, forceRefresh, 60),
           getChapters(forceRefresh)
         ]);
         setBankQuestions(b || []);
@@ -545,22 +556,18 @@ export default function AdminDashboard() {
     return Array.from(map.values());
   }, [bankQuestions, quizzes]);
 
-  // Khi chuyển Khối trong Ngân hàng câu hỏi (hoặc mở modal từ màn hình soạn đề), tự động tải câu hỏi khối tương ứng (có cache)
+  // Khi chuyển Khối / Bộ lọc / Trang trong Ngân hàng câu hỏi, tự động tải đúng trang (40 câu ~ 40KB)
   useEffect(() => {
-    if (activeTab === 'bank' || isBankOpen) {
-      const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : undefined;
-      getBankQuestions(targetGrade).then(loaded => {
-        if (loaded && loaded.length > 0) {
-          setBankQuestions(prev => {
-            const map = new Map<string, Question>();
-            prev.forEach((item, idx) => map.set(item.id || `q_b_${idx}`, item));
-            loaded.forEach((item, idx) => map.set(item.id || `q_l_${idx}`, item));
-            return Array.from(map.values());
-          });
-        }
-      }).catch(err => console.warn("Lỗi tải ngân hàng câu hỏi theo khối:", err));
+    if (activeTab === 'bank') {
+      const timer = setTimeout(() => {
+        getBankQuestionsPage(bPage, 40, bGradeFilter, bChapterFilter, bTypeFilter, 'all', bSearch).then(res => {
+          setBankQuestions(res.data || []);
+          setBankTotal(res.total || 0);
+        }).catch(err => console.warn("Lỗi tải trang ngân hàng câu hỏi:", err));
+      }, 300);
+      return () => clearTimeout(timer);
     }
-  }, [bGradeFilter, activeTab, isBankOpen]);
+  }, [bGradeFilter, bChapterFilter, bTypeFilter, bSearch, bPage, activeTab]);
 
   // Quiz Handlers
   const handleCreateQuiz = () => {

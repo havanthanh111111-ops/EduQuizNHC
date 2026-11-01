@@ -2,7 +2,7 @@
 /// <reference types="vite/client" />
 
 import { createClient } from '@supabase/supabase-js';
-import { User, Quiz, Result, Chapter, QuizFolder, Question, ExamSession, PublishedResult, Grade, ClassRoom } from '../types';
+import { User, Quiz, Result, Chapter, QuizFolder, Question, QuestionType, ExamSession, PublishedResult, Grade, ClassRoom } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
 let cleanedUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://buelyuxsztnhrwinrldp.supabase.co').trim();
@@ -150,46 +150,30 @@ export const getResultsMetadataPage = async (page: number, pageSize: number = 50
   }
 };
 
-export const getResultsMetadata = async (quizId?: string, maxRecords: number = 2000, forceRefresh: boolean = false): Promise<Result[]> => {
+export const getResultsMetadata = async (quizId?: string, maxRecords: number = 200, forceRefresh: boolean = false): Promise<Result[]> => {
   if (!supabase) return [];
-  const cacheKey = `results_meta_${quizId || 'all'}`;
+  const cacheKey = `results_meta_${quizId || 'all'}_${maxRecords}`;
   const now = Date.now();
   if (!forceRefresh && memoryCache[cacheKey] && memoryCache[cacheKey].expires > now) {
     return memoryCache[cacheKey].data;
   }
   try {
-      let allData: any[] = [];
-      let from = 0;
-      const step = 1000;
-      let hasMore = true;
-
-      while (hasMore && allData.length < maxRecords) {
-          let query = supabase.from('results')
-            .select('id, quiz_id, student_id, data')
-            .order('id', { ascending: false })
-            .range(from, from + step - 1);
-            
-          if (quizId && quizId !== 'all') {
-            query = query.or(`quiz_id.eq.${quizId},data->>quizId.eq.${quizId}`);
-          }
-          
-          const { data, error } = await query;
-          if (error) {
-            console.warn("Lỗi fetch results meta batch:", error);
-            hasMore = false;
-            break;
-          }
-          
-          if (data && data.length > 0) {
-              allData = [...allData, ...data];
-              from += step;
-              if (data.length < step) hasMore = false;
-          } else {
-              hasMore = false;
-          }
+      let query = supabase.from('results')
+        .select('id, quiz_id, student_id, data')
+        .order('id', { ascending: false })
+        .limit(maxRecords);
+        
+      if (quizId && quizId !== 'all') {
+        query = query.or(`quiz_id.eq.${quizId},data->>quizId.eq.${quizId}`);
       }
       
-      const mapped = allData.map(mapRowToResultMeta);
+      const { data, error } = await query;
+      if (error) {
+        console.warn("Lỗi fetch results meta:", error);
+        return [];
+      }
+      
+      const mapped = (data || []).map(mapRowToResultMeta);
       memoryCache[cacheKey] = { data: mapped, expires: now + CACHE_TTL };
       return mapped;
   } catch (e) {
@@ -206,36 +190,22 @@ export const getResultsCount = async (quizId?: string): Promise<number> => {
   return error ? 0 : (count || 0);
 };
 
-export const getResults = async (quizId?: string, maxRecords: number = 5000): Promise<Result[]> => {
+export const getResults = async (quizId?: string, maxRecords: number = 500): Promise<Result[]> => {
   if (!supabase) return [];
   try {
-      let allData: any[] = [];
-      let from = 0;
-      const step = 1000;
-      let hasMore = true;
-
-      while (hasMore && allData.length < maxRecords) {
-          let query = supabase.from('results')
-            .select('data')
-            .order('id', { ascending: false })
-            .range(from, from + step - 1);
-            
-          if (quizId && quizId !== 'all') {
-            query = query.eq('quiz_id', quizId);
-          }
-          
-          const { data, error } = await query;
-          if (error) throw error;
-          
-          if (data && data.length > 0) {
-              allData = [...allData, ...data];
-              from += step;
-              if (data.length < step) hasMore = false;
-          } else {
-              hasMore = false;
-          }
+      let query = supabase.from('results')
+        .select('id, quiz_id, student_id, data')
+        .order('id', { ascending: false })
+        .limit(maxRecords);
+        
+      if (quizId && quizId !== 'all') {
+        query = query.eq('quiz_id', quizId);
       }
-      return allData.map((row: any) => row.data as Result);
+      
+      const { data, error } = await query;
+      if (error) throw error;
+      
+      return (data || []).map((row: any) => (row.data || row) as Result);
   } catch (e) {
       return [];
   }
@@ -1421,9 +1391,64 @@ export const assignStudentsToClass = async (studentIds: string[], classInfo: { c
 };
 
 // --- Question Bank ---
+export const getBankQuestionsPage = async (
+    page: number = 1,
+    pageSize: number = 40,
+    gradeFilter?: Grade | 'all',
+    chapterFilter?: string,
+    typeFilter?: QuestionType | 'all',
+    levelFilter?: string,
+    search?: string
+): Promise<{ data: Question[], total: number }> => {
+    if (!supabase) return { data: [], total: 0 };
+    try {
+        const from = (page - 1) * pageSize;
+        const to = from + pageSize - 1;
+
+        let query = supabase.from('bank_questions')
+            .select('data', { count: 'exact' });
+
+        if (gradeFilter && gradeFilter !== 'all') {
+            query = query.or(`data->>quizGrade.eq.${gradeFilter},data->>grade.eq.${gradeFilter}`);
+        }
+
+        if (typeFilter && typeFilter !== 'all') {
+            query = query.eq('data->>type', typeFilter);
+        }
+
+        if (levelFilter && levelFilter !== 'all') {
+            query = query.eq('data->>level', levelFilter);
+        }
+
+        if (search) {
+            query = query.ilike('data->>text', `%${search}%`);
+        }
+
+        const { data, count, error } = await query
+            .order('id', { ascending: false })
+            .range(from, to);
+
+        if (error) throw error;
+
+        let questions = data ? data.map((row: any) => row.data as Question) : [];
+        if (chapterFilter && chapterFilter !== 'all') {
+            const lowerCh = chapterFilter.toLowerCase();
+            questions = questions.filter((q: Question) => 
+                (q.chapterName && q.chapterName.toLowerCase().includes(lowerCh)) ||
+                (q.quizCategory && q.quizCategory.toLowerCase().includes(lowerCh))
+            );
+        }
+        return { data: questions, total: count || 0 };
+    } catch (e) {
+        console.error("Lỗi getBankQuestionsPage:", e);
+        return { data: [], total: 0 };
+    }
+};
+
 export const getBankQuestions = async (
     gradeFilterOrForce?: Grade | 'all' | boolean, 
-    forceRefreshParam: boolean = false
+    forceRefreshParam: boolean = false,
+    maxRecords: number = 100
 ): Promise<Question[]> => {
     if (!supabase) return [];
     
@@ -1438,37 +1463,22 @@ export const getBankQuestions = async (
     }
 
     const filterKey = gradeFilter || 'all';
-    const cacheKey = `bank_questions_${filterKey}`;
+    const cacheKey = `bank_questions_${filterKey}_${maxRecords}`;
     const now = Date.now();
     if (!forceRefresh && memoryCache[cacheKey] && memoryCache[cacheKey].expires > now) {
       return memoryCache[cacheKey].data;
     }
     try {
-        let allQuestions: any[] = [];
-        let from = 0;
-        const step = 1000;
-        let hasMore = true;
-
-        while (hasMore) {
-            let query = supabase.from('bank_questions')
-                .select('data');
-            
-            if (gradeFilter && gradeFilter !== 'all') {
-                query = query.or(`data->>quizGrade.eq.${gradeFilter},data->>grade.eq.${gradeFilter}`);
-            }
-
-            const { data, error } = await query.range(from, from + step - 1);
-            
-            if (error) throw error;
-            if (data && data.length > 0) {
-                allQuestions = [...allQuestions, ...data];
-                from += step;
-                if (data.length < step) hasMore = false;
-            } else {
-                hasMore = false;
-            }
+        let query = supabase.from('bank_questions').select('data');
+        
+        if (gradeFilter && gradeFilter !== 'all') {
+            query = query.or(`data->>quizGrade.eq.${gradeFilter},data->>grade.eq.${gradeFilter}`);
         }
-        const result = allQuestions.map((row: any) => row.data as Question);
+
+        const { data, error } = await query.order('id', { ascending: false }).limit(maxRecords);
+        
+        if (error) throw error;
+        const result = (data || []).map((row: any) => row.data as Question);
         memoryCache[cacheKey] = { data: result, expires: now + CACHE_TTL };
         return result;
     } catch (e) {
