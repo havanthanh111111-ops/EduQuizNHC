@@ -85,6 +85,38 @@ const handleSupabaseError = (error: any, context: string) => {
     }
 };
 
+// Helper chuẩn hóa & cắt giảm 95% dung lượng cho Metadata Kết quả (loại bỏ hoàn toàn userAnswers và questions khỏi danh sách)
+const mapRowToResultMeta = (row: any): Result => {
+    const d = (row && row.data && typeof row.data === 'object') ? { ...row.data } : (row || {});
+    // Loại bỏ hoàn toàn mảng câu hỏi và câu trả lời chi tiết để giảm tối đa kích thước JSON
+    delete d.userAnswers;
+    delete d.questions;
+    delete d.questionsSnapshot;
+    delete d.answers;
+
+    return {
+        ...d,
+        id: String(row.id || d.id || ''),
+        quizId: String(row.quiz_id || d.quizId || ''),
+        studentId: String(row.student_id || d.studentId || ''),
+        studentName: d.studentName || 'Học sinh',
+        studentCode: d.studentCode || 'N/A',
+        score: typeof d.score === 'number' ? d.score : (parseFloat(d.score) || 0),
+        durationSeconds: typeof d.durationSeconds === 'number' ? d.durationSeconds : (parseInt(d.durationSeconds) || 0),
+        submittedAt: d.submittedAt || new Date().toISOString(),
+        totalQuestions: typeof d.totalQuestions === 'number' ? d.totalQuestions : (parseInt(d.totalQuestions) || 0),
+        correctCount: typeof d.correctCount === 'number' ? d.correctCount : (parseInt(d.correctCount) || 0),
+        wrongCount: typeof d.wrongCount === 'number' ? d.wrongCount : (parseInt(d.wrongCount) || 0),
+        unansweredCount: typeof d.unansweredCount === 'number' ? d.unansweredCount : (parseInt(d.unansweredCount) || 0),
+        grade: String(d.grade || '12') as Grade,
+        classId: d.classId || '',
+        className: d.className || '',
+        academicYear: d.academicYear || '',
+        userAnswers: {}, // Không tải userAnswers ở danh sách metadata
+        questions: [] // Không tải questions ở danh sách metadata
+    } as Result;
+};
+
 // --- Results ---
 export const getResultsMetadataPage = async (page: number, pageSize: number = 50, quizId?: string, search?: string): Promise<{ data: Result[], total: number }> => {
   if (!supabase) return { data: [], total: 0 };
@@ -109,12 +141,7 @@ export const getResultsMetadataPage = async (page: number, pageSize: number = 50
     const { data, count, error } = await query;
     if (error) throw error;
     
-    const results = data ? data.map((row: any) => ({
-      ...(row.data as Result),
-      id: row.id,
-      quizId: row.quiz_id,
-      studentId: row.student_id
-    })) : [];
+    const results = data ? data.map(mapRowToResultMeta) : [];
 
     return { data: results, total: count || 0 };
   } catch (e) {
@@ -123,7 +150,7 @@ export const getResultsMetadataPage = async (page: number, pageSize: number = 50
   }
 };
 
-export const getResultsMetadata = async (quizId?: string, maxRecords: number = 10000, forceRefresh: boolean = false): Promise<Result[]> => {
+export const getResultsMetadata = async (quizId?: string, maxRecords: number = 2000, forceRefresh: boolean = false): Promise<Result[]> => {
   if (!supabase) return [];
   const cacheKey = `results_meta_${quizId || 'all'}`;
   const now = Date.now();
@@ -138,7 +165,7 @@ export const getResultsMetadata = async (quizId?: string, maxRecords: number = 1
 
       while (hasMore && allData.length < maxRecords) {
           let query = supabase.from('results')
-            .select('*')
+            .select('id, quiz_id, student_id, data')
             .order('id', { ascending: false })
             .range(from, from + step - 1);
             
@@ -162,15 +189,7 @@ export const getResultsMetadata = async (quizId?: string, maxRecords: number = 1
           }
       }
       
-      const mapped = allData.map((row: any) => {
-          const res = (row.data && typeof row.data === 'object') ? row.data : (row || {});
-          return {
-              ...res,
-              id: row.id || res.id,
-              quizId: row.quiz_id || res.quizId,
-              studentId: row.student_id || res.studentId
-          } as Result;
-      });
+      const mapped = allData.map(mapRowToResultMeta);
       memoryCache[cacheKey] = { data: mapped, expires: now + CACHE_TTL };
       return mapped;
   } catch (e) {
