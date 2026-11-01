@@ -1605,9 +1605,6 @@ export default function AdminDashboard() {
                     grade={quizGrade} 
                     setGrade={setQuizGrade} 
                     chapters={chapters}
-                    bankQuestions={[]}
-                    isBankLoading={isBankLoading}
-                    onLoadBank={loadBankDataIfNeeded}
                     onGenerate={handleAiGenerate}
                     onGenerateFromMatrix={handleGenerateFromMatrix}
                     isLoading={isAiLoading}
