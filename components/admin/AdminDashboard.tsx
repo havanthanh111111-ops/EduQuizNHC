@@ -235,13 +235,20 @@ export default function AdminDashboard() {
         setQuizzes(q || []);
         setClasses(cls || []);
       } else if (tab === 'bank') {
-        const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : '10';
+        const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : '12';
         const [b, c] = await Promise.all([
           getBankQuestions(targetGrade, forceRefresh),
           getChapters(forceRefresh)
         ]);
         setBankQuestions(b || []);
         setChapters(c || []);
+        // Tự động chọn chương đầu tiên của khối nếu chưa khớp
+        if (c && c.length > 0) {
+          const gradeChapters = c.filter((ch: Chapter) => String(ch.grade) === String(targetGrade));
+          if (gradeChapters.length > 0 && (!bChapterFilter || bChapterFilter === 'all')) {
+            setBChapterFilter(gradeChapters[0].name);
+          }
+        }
       } else if (tab === 'ai') {
         // Soạn đề AI: KHÔNG tải nội dung câu hỏi vội, chỉ tải danh mục Chương để tiết kiệm 100% băng thông!
         const c = await getChapters(forceRefresh);
@@ -424,9 +431,10 @@ export default function AdminDashboard() {
     return () => clearTimeout(timer);
   }, [sSearch, activeTab]);
 
-  const [bGradeFilter, setBGradeFilter] = useState<Grade | 'all'>('10');
-  const [bChapterFilter, setBChapterFilter] = useState('all');
-  const [bTypeFilter, setBTypeFilter] = useState<QuestionType | 'all'>('all');
+  const [bGradeFilter, setBGradeFilter] = useState<Grade | 'all'>('12');
+  const [bChapterFilter, setBChapterFilter] = useState('Chương 1: Vật lí nhiệt');
+  const [bTypeFilter, setBTypeFilter] = useState<QuestionType | 'all'>('mcq');
+  const [bLevelFilter, setBLevelFilter] = useState<string>('H');
   const [bSearch, setBSearch] = useState('');
   const [bPage, setBPage] = useState(1);
 
