@@ -249,7 +249,7 @@ export const getResultsForStudent = async (studentId: string, studentCode?: stri
     return memoryCache[cacheKey].data;
   }
   let query = supabase.from('results')
-    .select('data')
+    .select('id, quiz_id, student_id, data')
     .order('id', { ascending: false })
     .limit(100); // Lấy 100 bài gần nhất của học sinh (tiết kiệm băng thông tối đa)
     
@@ -261,7 +261,7 @@ export const getResultsForStudent = async (studentId: string, studentCode?: stri
   }
   const { data, error } = await query;
   if (error) return [];
-  const result = data.map((row: any) => row.data as Result);
+  const result = data ? data.map(mapRowToResultMeta) : [];
   memoryCache[cacheKey] = { data: result, expires: now + CACHE_TTL };
   return result;
 };
