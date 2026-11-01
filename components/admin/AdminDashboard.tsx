@@ -188,7 +188,6 @@ export default function AdminDashboard() {
         if (q && q.length > 0) {
           setQuizzes(q);
         } else {
-          // Fallback nếu metadata rỗng thì thử lấy full quizzes
           const full = await getQuizzes(initialGrade, forceRefresh);
           if (full && full.length > 0) setQuizzes(full);
         }
@@ -206,61 +205,45 @@ export default function AdminDashboard() {
             });
           }
         }
-        // Tải kết quả bài thi trong background không làm treo giao diện
-        getResultsMetadata('all', 2000, forceRefresh).then(r => {
-          setResults(r || []);
-        }).catch(err => console.warn("Lỗi load results meta background:", err));
       } else if (tab === 'classes') {
-        const [cls, u, q, r, c] = await Promise.all([
+        const [cls, c] = await Promise.all([
           getClasses(forceRefresh),
-          getUsers(forceRefresh),
-          getQuizzesMetadata('all', forceRefresh),
-          getResultsMetadata('all', 2000, forceRefresh),
           getChapters(forceRefresh)
         ]);
-        setClasses(cls);
-        setStudents(u.filter(user => user.role === 'student'));
-        setQuizzes(q);
-        setResults(r);
-        setChapters(c);
+        setClasses(cls || []);
+        setChapters(c || []);
       } else if (tab === 'students') {
-        const [paged, r, q, cls] = await Promise.all([
+        const [paged, cls] = await Promise.all([
           getUsersPage(1, 50),
-          getResultsMetadata('all', 2000, forceRefresh),
-          getQuizzesMetadata('all', forceRefresh),
           getClasses(forceRefresh)
         ]);
         
         setStudents(paged.data.filter(user => user.role === 'student'));
         setStudentsTotal(paged.total);
         setStudentsPage(1);
-        setResults(r);
-        setQuizzes(q);
-        setClasses(cls);
+        setClasses(cls || []);
       } else if (tab === 'results') {
-        const [paged, q, u, cls] = await Promise.all([
+        const [paged, q, cls] = await Promise.all([
           getResultsMetadataPage(1, 50),
           getQuizzesMetadata('all', forceRefresh),
-          getUsers(forceRefresh),
           getClasses(forceRefresh)
         ]);
         setResults(paged.data);
         setResultsTotal(paged.total);
         setResultsPage(1);
-        setQuizzes(q);
-        setStudents(u.filter(user => user.role === 'student'));
-        setClasses(cls);
+        setQuizzes(q || []);
+        setClasses(cls || []);
       } else if (tab === 'bank') {
         const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : '10';
         const [b, c] = await Promise.all([
           getBankQuestions(targetGrade, forceRefresh),
           getChapters(forceRefresh)
         ]);
-        setBankQuestions(b);
-        setChapters(c);
+        setBankQuestions(b || []);
+        setChapters(c || []);
       } else if (tab === 'chapters') {
         const c = await getChapters(forceRefresh);
-        setChapters(c);
+        setChapters(c || []);
       }
     } catch (e) {
       console.error("Lỗi tải dữ liệu tab:", tab, e);
