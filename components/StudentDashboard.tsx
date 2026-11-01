@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { User, Quiz, Result, PublishedResult, Chapter, Grade } from '../types';
-import { getQuizzesMetadata, getResultsForStudent, getPublishedResultsForStudent, getQuizById, getStudentActiveSessions, deleteExamSession, getChapters, getCurrentAcademicYear } from '../services/storage';
+import { getQuizzesMetadata, getResultsForStudent, getPublishedResultsForStudent, getQuizById, getResultById, getStudentActiveSessions, deleteExamSession, getChapters, getCurrentAcademicYear } from '../services/storage';
 import { downloadQuizForOffline, getOfflineQuizzes, getOfflineQuizById, deleteOfflineQuiz } from '../services/offlineStorage';
 import { useOfflineSync } from '../services/offlineSyncManager';
 import OfflineManagerModal from './OfflineManagerModal';
@@ -358,8 +358,13 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
   const handleViewResult = async (res: Result) => {
     setIsLoading(true);
     try {
-      const fullQuiz = await getQuizById(res.quizId);
-      if (fullQuiz) {
+      const [fullQuiz, fullResult] = await Promise.all([
+        getQuizById(res.quizId),
+        getResultById(res.id)
+      ]);
+      if (fullQuiz && fullResult) {
+        setSelectedResult({ result: fullResult, quiz: fullQuiz });
+      } else if (fullQuiz) {
         setSelectedResult({ result: res, quiz: fullQuiz });
       } else {
         alert("Đề thi này đã bị xóa hoặc không tìm thấy dữ liệu.");
