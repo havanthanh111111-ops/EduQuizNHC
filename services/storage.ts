@@ -1445,10 +1445,24 @@ export const getBankQuestionsPage = async (
     }
 };
 
+export const getBankQuestionsCount = async (gradeFilter?: Grade | 'all'): Promise<number> => {
+    if (!supabase) return 0;
+    try {
+        let query = supabase.from('bank_questions').select('*', { count: 'exact', head: true });
+        if (gradeFilter && gradeFilter !== 'all') {
+            query = query.or(`data->>quizGrade.eq.${gradeFilter},data->>grade.eq.${gradeFilter}`);
+        }
+        const { count, error } = await query;
+        if (error) return 0;
+        return count || 0;
+    } catch {
+        return 0;
+    }
+};
+
 export const getBankQuestions = async (
     gradeFilterOrForce?: Grade | 'all' | boolean, 
-    forceRefreshParam: boolean = false,
-    maxRecords: number = 100
+    forceRefreshParam: boolean = false
 ): Promise<Question[]> => {
     if (!supabase) return [];
     
@@ -1463,22 +1477,37 @@ export const getBankQuestions = async (
     }
 
     const filterKey = gradeFilter || 'all';
-    const cacheKey = `bank_questions_${filterKey}_${maxRecords}`;
+    const cacheKey = `bank_questions_${filterKey}`;
     const now = Date.now();
     if (!forceRefresh && memoryCache[cacheKey] && memoryCache[cacheKey].expires > now) {
       return memoryCache[cacheKey].data;
     }
     try {
-        let query = supabase.from('bank_questions').select('data');
-        
-        if (gradeFilter && gradeFilter !== 'all') {
-            query = query.or(`data->>quizGrade.eq.${gradeFilter},data->>grade.eq.${gradeFilter}`);
-        }
+        let allQuestions: any[] = [];
+        let from = 0;
+        const step = 1000;
+        let hasMore = true;
 
-        const { data, error } = await query.order('id', { ascending: false }).limit(maxRecords);
-        
-        if (error) throw error;
-        const result = (data || []).map((row: any) => row.data as Question);
+        while (hasMore) {
+            let query = supabase.from('bank_questions')
+                .select('data');
+            
+            if (gradeFilter && gradeFilter !== 'all') {
+                query = query.or(`data->>quizGrade.eq.${gradeFilter},data->>grade.eq.${gradeFilter}`);
+            }
+
+            const { data, error } = await query.range(from, from + step - 1);
+            
+            if (error) throw error;
+            if (data && data.length > 0) {
+                allQuestions = [...allQuestions, ...data];
+                from += step;
+                if (data.length < step) hasMore = false;
+            } else {
+                hasMore = false;
+            }
+        }
+        const result = allQuestions.map((row: any) => row.data as Question);
         memoryCache[cacheKey] = { data: result, expires: now + CACHE_TTL };
         return result;
     } catch (e) {
