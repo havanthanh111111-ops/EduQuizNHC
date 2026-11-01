@@ -237,20 +237,14 @@ export default function AdminDashboard() {
       } else if (tab === 'bank') {
         const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : '10';
         const [b, c] = await Promise.all([
-          getBankQuestionsPage(1, 40, targetGrade, bChapterFilter, bTypeFilter, 'all', bSearch),
-          getChapters(forceRefresh)
-        ]);
-        setBankQuestions(b.data || []);
-        setBankTotal(b.total || 0);
-        setBPage(1);
-        setChapters(c || []);
-      } else if (tab === 'ai') {
-        const targetGrade = quizGrade || '10';
-        const [b, c] = await Promise.all([
-          getBankQuestions(targetGrade, forceRefresh, 60),
+          getBankQuestions(targetGrade, forceRefresh),
           getChapters(forceRefresh)
         ]);
         setBankQuestions(b || []);
+        setChapters(c || []);
+      } else if (tab === 'ai') {
+        // Soạn đề AI: KHÔNG tải nội dung câu hỏi vội, chỉ tải danh mục Chương để tiết kiệm 100% băng thông!
+        const c = await getChapters(forceRefresh);
         setChapters(c || []);
       } else if (tab === 'chapters') {
         const c = await getChapters(forceRefresh);
@@ -556,18 +550,17 @@ export default function AdminDashboard() {
     return Array.from(map.values());
   }, [bankQuestions, quizzes]);
 
-  // Khi chuyển Khối / Bộ lọc / Trang trong Ngân hàng câu hỏi, tự động tải đúng trang (40 câu ~ 40KB)
+  // Khi chuyển Khối trong Ngân hàng câu hỏi (hoặc mở modal từ màn hình soạn đề), tự động tải câu hỏi khối tương ứng (có cache memory)
   useEffect(() => {
-    if (activeTab === 'bank') {
-      const timer = setTimeout(() => {
-        getBankQuestionsPage(bPage, 40, bGradeFilter, bChapterFilter, bTypeFilter, 'all', bSearch).then(res => {
-          setBankQuestions(res.data || []);
-          setBankTotal(res.total || 0);
-        }).catch(err => console.warn("Lỗi tải trang ngân hàng câu hỏi:", err));
-      }, 300);
-      return () => clearTimeout(timer);
+    if (activeTab === 'bank' || isBankOpen) {
+      const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : '10';
+      getBankQuestions(targetGrade).then(loaded => {
+        if (loaded) {
+          setBankQuestions(loaded);
+        }
+      }).catch(err => console.warn("Lỗi tải ngân hàng câu hỏi theo khối:", err));
     }
-  }, [bGradeFilter, bChapterFilter, bTypeFilter, bSearch, bPage, activeTab]);
+  }, [bGradeFilter, activeTab, isBankOpen]);
 
   // Quiz Handlers
   const handleCreateQuiz = () => {
