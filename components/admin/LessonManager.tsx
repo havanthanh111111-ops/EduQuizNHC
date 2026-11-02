@@ -102,7 +102,7 @@ const SAMPLE_VERCEL_LESSONS: Omit<Lesson, 'id'>[] = [
     chapterName: 'Chương 1: Mở đầu & Động học',
     title: 'Bài 1: Làm quen với Vật lí',
     url: 'https://hethonghoctap-nhc.vercel.app/student?subject=10&node=g10-1780405969901',
-    defaultKeyConcept: 'Vật lí là ngành khoa học tự nhiên nghiên cứu các dạng vận động của vật chất và năng lượng. Sai số tuyệt đối: $\\Delta A = |\\bar{A} - A_i|$.'
+    defaultKeyConcept: '1/ Đối tượng nghiên cứu của Vật lí:\n- Các dạng vận động của vật chất và năng lượng.\n2/ Công thức sai số:\n- Sai số tuyệt đối: $\\Delta A = |\\bar{A} - A_i|$\n- Sai số tỉ đối: $\\delta A = \\frac{\\Delta A}{\\bar{A}} \\times 100\\%$'
   },
   {
     grade: '10',
@@ -110,7 +110,7 @@ const SAMPLE_VERCEL_LESSONS: Omit<Lesson, 'id'>[] = [
     chapterName: 'Chương 2: Động lực học',
     title: 'Bài 13: Tổng hợp và phân tích lực. Cân bằng lực',
     url: 'https://hethonghoctap-nhc.vercel.app/student?subject=10&node=g10-1780405969910',
-    defaultKeyConcept: 'Công thức tổng hợp lực: $F = \\sqrt{F_1^2 + F_2^2 + 2F_1F_2\\cos\\alpha}$.\n- Khi hai lực cùng chiều ($\\alpha = 0^\\circ$): $F = F_1 + F_2$.\n- Khi hai lực ngược chiều ($\\alpha = 180^\\circ$): $F = |F_1 - F_2|$.\n- Khi hai lực vuông góc ($\\alpha = 90^\\circ$): $F = \\sqrt{F_1^2 + F_2^2}$.'
+    defaultKeyConcept: '1/ Công thức độ lớn hợp lực của hai lực đồng quy $\\vec{F}_1, \\vec{F}_2$:\n$$F = \\sqrt{F_1^2 + F_2^2 + 2F_1F_2\\cos\\alpha}$$\n- Cùng chiều ($\\alpha = 0^\\circ$): $F_{\\max} = F_1 + F_2$\n- Ngược chiều ($\\alpha = 180^\\circ$): $F_{\\min} = |F_1 - F_2|$\n- Vuông góc ($\\alpha = 90^\\circ$): $F = \\sqrt{F_1^2 + F_2^2}$'
   },
   {
     grade: '10',
@@ -118,7 +118,7 @@ const SAMPLE_VERCEL_LESSONS: Omit<Lesson, 'id'>[] = [
     chapterName: 'Chương 2: Động lực học',
     title: 'Bài 14: Định luật 1 Newton & Quán tính',
     url: 'https://hethonghoctap-nhc.vercel.app/student?subject=10&node=g10-1780405969911',
-    defaultKeyConcept: 'Nếu một vật không chịu tác dụng của lực nào hoặc chịu tác dụng của các lực có hợp lực bằng 0 thì vật đang đứng yên sẽ tiếp tục đứng yên, đang chuyển động sẽ tiếp tục chuyển động thẳng đều.'
+    defaultKeyConcept: '1/ Định luật I Newton (Quán tính):\nNếu một vật không chịu tác dụng của lực nào hoặc chịu tác dụng của các lực có hợp lực bằng không:\n$$\\Sigma \\vec{F} = \\vec{0} \\Rightarrow \\vec{a} = \\vec{0}$$\n- Vật đang đứng yên tiếp tục đứng yên; vật đang chuyển động sẽ tiếp tục chuyển động thẳng đều.'
   },
   {
     grade: '11',
@@ -126,7 +126,7 @@ const SAMPLE_VERCEL_LESSONS: Omit<Lesson, 'id'>[] = [
     chapterName: 'Chương 1: Dao động',
     title: 'Bài 1: Mô tả dao động điều hòa',
     url: 'https://hethonghoctap-nhc.vercel.app/student?subject=11&node=g11-dao-dong-dieu-hoa',
-    defaultKeyConcept: 'Phương trình dao động: $x = A\\cos(\\omega t + \\varphi)$.\n- Vận tốc: $v = x\' = -\\omega A\\sin(\\omega t + \\varphi)$.\n- Gia tốc: $a = v\' = -\\omega^2 x$. Chu kì: $T = \\frac{2\\pi}{\\omega}$.'
+    defaultKeyConcept: '1/ Phương trình dao động điều hòa:\n- Li độ: $x = A\\cos(\\omega t + \\varphi)$\n- Vận tốc: $v = -\\omega A\\sin(\\omega t + \\varphi)$\n- Gia tốc: $a = -\\omega^2 x$\n- Chu kì: $T = \\frac{2\\pi}{\\omega}$, tần số: $f = \\frac{1}{T}$'
   },
   {
     grade: '12',
@@ -134,7 +134,7 @@ const SAMPLE_VERCEL_LESSONS: Omit<Lesson, 'id'>[] = [
     chapterName: 'Chương 1: Vật lí nhiệt',
     title: 'Bài 1: Cấu trúc của chất. Sự chuyển thể',
     url: 'https://hethonghoctap-nhc.vercel.app/student?subject=12&node=g12-vat-li-nhiet-b1',
-    defaultKeyConcept: 'Nội năng của một vật là tổng động năng và thế năng của các phân tử cấu tạo nên vật: $U = E_d + E_t$.\nNhiệt lượng: $Q = mc\\Delta T$. Nhiệt nóng chảy: $Q = \\lambda m$.'
+    defaultKeyConcept: '1/ Mô hình động học phân tử về cấu tạo chất:\n- Các chất được cấu tạo từ các hạt riêng biệt là phân tử.\n- Các phân tử chuyển động hỗn loạn không ngừng.\n2/ Công thức nhiệt lượng:\n- Thay đổi nhiệt độ: $Q = m \\cdot c \\cdot \\Delta T$\n- Nhiệt nóng chảy: $Q = \\lambda \\cdot m$\n- Nhiệt hóa hơi: $Q = L \\cdot m$'
   }
 ];
 
@@ -332,7 +332,27 @@ export default function LessonManager({
       map.get(key)!.items.push(l);
     });
 
-    return Array.from(map.values());
+    const groups = Array.from(map.values());
+    // Sắp xếp bài học trong từng chương theo thứ tự Bài 1, Bài 2, Bài 3...
+    groups.forEach(g => {
+      g.items.sort((a, b) => {
+        const numA = (a.title.match(/bài\s*(\d+)/i) || a.title.match(/^(\d+)/))?.[1];
+        const numB = (b.title.match(/bài\s*(\d+)/i) || b.title.match(/^(\d+)/))?.[1];
+        if (numA && numB) return parseInt(numA, 10) - parseInt(numB, 10);
+        return a.title.localeCompare(b.title, undefined, { numeric: true });
+      });
+    });
+
+    // Sắp xếp các chương theo Khối và Chương 1, Chương 2, Chương 3...
+    groups.sort((a, b) => {
+      if (a.grade !== b.grade) return a.grade.localeCompare(b.grade, undefined, { numeric: true });
+      const numChA = (a.chapterName.match(/chương\s*(\d+)/i))?.[1];
+      const numChB = (b.chapterName.match(/chương\s*(\d+)/i))?.[1];
+      if (numChA && numChB) return parseInt(numChA, 10) - parseInt(numChB, 10);
+      return a.chapterName.localeCompare(b.chapterName, undefined, { numeric: true });
+    });
+
+    return groups;
   }, [filteredLessons, chapters]);
 
   // Danh sách các chương để đưa vào dropdown bộ lọc:
@@ -796,26 +816,32 @@ export default function LessonManager({
                 </div>
 
                 {/* Kiến thức trọng tâm mặc định (tùy chọn) */}
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">
                       Khung kiến thức cốt lõi (tùy chọn):
                     </label>
-                    <span className="text-[9px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
-                      KaTeX: $...$
+                    <span className="text-[9px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md">
+                      Hỗ trợ LaTeX ($...$)
                     </span>
                   </div>
+
                   <textarea
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:border-blue-500 transition-all placeholder:text-slate-400 leading-relaxed min-h-[60px] max-h-[120px]"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-800 outline-none focus:border-blue-500 transition-all placeholder:text-slate-400 leading-relaxed min-h-[70px] max-h-[140px]"
                     rows={3}
-                    placeholder="VD: Công thức tổng hợp lực: $F = \sqrt{F_1^2 + F_2^2 + 2F_1F_2\cos\alpha}$..."
+                    placeholder="VD: Công thức: $F = \sqrt{F_1^2 + F_2^2 + 2F_1F_2\cos\alpha}$&#10;Ghi chú: Gia tốc luôn ngược pha với li độ..."
                     value={formDefaultKeyConcept}
                     onChange={e => setFormDefaultKeyConcept(e.target.value)}
                   />
                   {formDefaultKeyConcept && (
-                    <div className="p-2.5 bg-amber-50/70 rounded-xl border border-amber-200 text-xs text-slate-700 shadow-2xs max-h-28 overflow-y-auto">
-                      <p className="text-[9px] font-black uppercase text-amber-800 mb-0.5">Xem trước công thức:</p>
-                      <LatexText text={formDefaultKeyConcept} />
+                    <div className="p-2.5 bg-amber-50/70 rounded-xl border border-amber-200 text-xs text-slate-700 shadow-2xs max-h-36 overflow-y-auto">
+                      <p className="text-[9px] font-black uppercase text-amber-800 mb-1 flex items-center gap-1">
+                        <Sparkles size={10} className="text-amber-600" />
+                        <span>Xem trước hiển thị:</span>
+                      </p>
+                      <div className="p-2 bg-white rounded-lg border border-amber-100">
+                        <LatexText text={formDefaultKeyConcept} />
+                      </div>
                     </div>
                   )}
                 </div>
