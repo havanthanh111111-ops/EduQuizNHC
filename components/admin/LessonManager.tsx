@@ -8,6 +8,82 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import LessonViewerModal from '../LessonViewerModal';
 import LatexText from '../LatexText';
+import { getChapterNumberFromName } from './MatrixQuizGenerator';
+
+// Chuẩn hóa tên chương để so khớp mềm dẻo không phân biệt:
+// - Viết hoa / viết thường
+// - Dấu gạch ngang, dấu hai chấm, khoảng trắng thừa
+// - Chính tả "lí" (i ngắn) vs "lý" (y dài) phổ biến trong tiếng Việt (Vật lí / Vật lý, Khí lí / Khí lý)
+export const normalizeChapterText = (str?: string): string => {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .normalize('NFC')
+    .replace(/lý/g, 'lí')
+    .replace(/ký/g, 'kí')
+    .replace(/[.:,\-_/\\()[\]{}|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+export const matchLessonToChapterFilter = (
+  lesson: { grade: Grade; chapterId?: string; chapterName?: string },
+  filterVal: string,
+  allChapters: Chapter[]
+): boolean => {
+  if (!filterVal || filterVal === 'all') return true;
+
+  const lessonChId = lesson.chapterId || '';
+  const lessonChName = lesson.chapterName || '';
+
+  // 1. Khớp chính xác ID hoặc Name
+  if (lessonChId === filterVal || lessonChName === filterVal) return true;
+
+  // 2. Tra cứu đối tượng Chapter trong danh sách hệ thống theo ID hoặc Name
+  const targetChapter = allChapters.find(
+    c => c.id === filterVal || c.name === filterVal || (c as any).title === filterVal
+  );
+
+  if (targetChapter) {
+    if (lessonChId && lessonChId === targetChapter.id) return true;
+    const targetNorm = normalizeChapterText(targetChapter.name || (targetChapter as any).title);
+    const lessonNorm = normalizeChapterText(lessonChName);
+    if (targetNorm && lessonNorm) {
+      if (targetNorm === lessonNorm) return true;
+      if (targetNorm.includes(lessonNorm) || lessonNorm.includes(targetNorm)) return true;
+    }
+  }
+
+  // 3. Khớp chuỗi đã chuẩn hóa (khắc phục lí / lý, hoa / thường, dấu câu)
+  const filterNorm = normalizeChapterText(filterVal);
+  const lessonNorm = normalizeChapterText(lessonChName);
+  if (filterNorm && lessonNorm) {
+    if (filterNorm === lessonNorm) return true;
+    if (filterNorm.includes(lessonNorm) || lessonNorm.includes(filterNorm)) return true;
+  }
+
+  // 4. Khớp theo số thứ tự chương (VD: "Chương 1: vật lý nhiệt" và "Chương 1: Vật lí nhiệt")
+  const getChapterNum = (text: string) => {
+    const m = text.match(/chương\s*(\d+)/i);
+    return m ? parseInt(m[1], 10) : null;
+  };
+  const numFilter = getChapterNum(filterVal);
+  const numLesson = getChapterNum(lessonChName);
+  if (numFilter !== null && numLesson !== null && numFilter === numLesson) {
+    return true;
+  }
+
+  // 5. Khớp theo chủ đề từ khóa chuẩn Vật lí
+  try {
+    const numF = getChapterNumberFromName(filterVal, lesson.grade);
+    const numL = getChapterNumberFromName(lessonChName, lesson.grade);
+    if (numF > 0 && numL > 0 && numF === numL) {
+      return true;
+    }
+  } catch (e) {}
+
+  return false;
+};
 
 interface LessonManagerProps {
   lessons: Lesson[];
@@ -191,8 +267,11 @@ export default function LessonManager({
     }
 
     const newLessons: Lesson[] = SAMPLE_VERCEL_LESSONS.map(s => {
-      // Tìm chương khớp tên nếu có
-      const matchedCh = chapters.find(c => String(c.grade) === String(s.grade) && (c.name.includes(s.chapterName) || s.chapterName.includes(c.name)));
+      // Tìm chương khớp tên mềm dẻo nếu có
+      const matchedCh = chapters.find(c => {
+        if (String(c.grade) !== String(s.grade)) return false;
+        return matchLessonToChapterFilter(s, c.name, chapters);
+      });
       return {
         ...s,
         id: uuidv4(),
@@ -221,28 +300,32 @@ export default function LessonManager({
     }
   };
 
-  // Lọc bài học theo Khối, Chương, và Từ khóa
+  // Lọc bài học theo Khối, Chương, và Từ khóa (so khớp mềm dẻo lí/lý, hoa/thường, ID/Tên)
   const filteredLessons = useMemo(() => {
     return lessons.filter(l => {
       const matchGrade = selectedGrade === 'all' || String(l.grade) === String(selectedGrade);
-      const matchChapter = selectedChapterFilter === 'all' || l.chapterName === selectedChapterFilter || l.chapterId === selectedChapterFilter;
+      const matchChapter = matchLessonToChapterFilter(l, selectedChapterFilter, chapters);
       const q = searchQuery.toLowerCase().trim();
       const matchSearch = !q || l.title.toLowerCase().includes(q) || l.url.toLowerCase().includes(q) || (l.defaultKeyConcept && l.defaultKeyConcept.toLowerCase().includes(q));
       return matchGrade && matchChapter && matchSearch;
     });
-  }, [lessons, selectedGrade, selectedChapterFilter, searchQuery]);
+  }, [lessons, selectedGrade, selectedChapterFilter, searchQuery, chapters]);
 
   // Gom nhóm bài học theo Khối & Chương để hiển thị theo cây khoa học
   const groupedLessons = useMemo(() => {
     const map = new Map<string, { grade: Grade; chapterName: string; chapterId: string; items: Lesson[] }>();
 
     filteredLessons.forEach(l => {
-      const key = `${l.grade}___${l.chapterName}`;
+      // Tìm tên chương chuẩn từ chapters nếu có để gom nhóm đồng nhất
+      const sysChapter = chapters.find(c => String(c.grade) === String(l.grade) && matchLessonToChapterFilter(l, c.name, chapters));
+      const groupDisplayName = sysChapter ? (sysChapter.name || (sysChapter as any).title) : l.chapterName;
+      const key = `${l.grade}___${normalizeChapterText(groupDisplayName)}`;
+
       if (!map.has(key)) {
         map.set(key, {
           grade: l.grade,
-          chapterName: l.chapterName,
-          chapterId: l.chapterId,
+          chapterName: groupDisplayName,
+          chapterId: sysChapter ? sysChapter.id : l.chapterId,
           items: []
         });
       }
@@ -250,12 +333,61 @@ export default function LessonManager({
     });
 
     return Array.from(map.values());
-  }, [filteredLessons]);
+  }, [filteredLessons, chapters]);
 
-  // Danh sách chương của khối đang chọn để lọc
-  const activeGradeChapters = useMemo(() => {
-    return chapters.filter(c => selectedGrade === 'all' || String(c.grade) === String(selectedGrade));
-  }, [chapters, selectedGrade]);
+  // Danh sách các chương để đưa vào dropdown bộ lọc:
+  // Hợp nhất giữa bảng chapters của hệ thống và các chapterName thực tế đang có trong lessons
+  const filterChapterOptions = useMemo(() => {
+    type ChapterOption = {
+      id: string;
+      name: string;
+      lessonCount: number;
+    };
+
+    const gradeLessons = lessons.filter(l => selectedGrade === 'all' || String(l.grade) === String(selectedGrade));
+    const gradeChapters = chapters.filter(c => selectedGrade === 'all' || String(c.grade) === String(selectedGrade));
+
+    const options: ChapterOption[] = [];
+    const addedNorms = new Set<string>();
+
+    // 1. Thêm các chương từ danh mục chapters
+    gradeChapters.forEach(c => {
+      const name = c.name || (c as any).title || "Chương chưa đặt tên";
+      const norm = normalizeChapterText(name);
+      // Đếm số bài học thực tế thuộc chương này trong khối đang chọn
+      const count = gradeLessons.filter(l => matchLessonToChapterFilter(l, name, chapters) || (l.chapterId && l.chapterId === c.id)).length;
+      options.push({
+        id: c.id,
+        name: name,
+        lessonCount: count
+      });
+      if (norm) addedNorms.add(norm);
+    });
+
+    // 2. Bổ sung các chương có bài học trong lessons mà chưa có trong danh mục chapters
+    gradeLessons.forEach(l => {
+      if (!l.chapterName) return;
+      const norm = normalizeChapterText(l.chapterName);
+      if (!norm || addedNorms.has(norm)) return;
+
+      const exists = options.some(opt => {
+        const optNorm = normalizeChapterText(opt.name);
+        return optNorm === norm || (optNorm && norm && (optNorm.includes(norm) || norm.includes(optNorm)));
+      });
+
+      if (!exists) {
+        const count = gradeLessons.filter(item => matchLessonToChapterFilter(item, l.chapterName, chapters)).length;
+        options.push({
+          id: l.chapterId || l.chapterName,
+          name: l.chapterName,
+          lessonCount: count
+        });
+        addedNorms.add(norm);
+      }
+    });
+
+    return options;
+  }, [chapters, lessons, selectedGrade]);
 
   return (
     <div className="space-y-8 animate-fade-in pb-20">
@@ -323,14 +455,14 @@ export default function LessonManager({
 
             {/* Lọc chương */}
             <select
-              className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700 outline-none focus:border-blue-500 transition-all max-w-xs"
+              className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700 outline-none focus:border-blue-500 transition-all max-w-xs cursor-pointer shadow-2xs"
               value={selectedChapterFilter}
               onChange={e => setSelectedChapterFilter(e.target.value)}
             >
               <option value="all">📂 Tất cả chương học</option>
-              {activeGradeChapters.map(c => (
-                <option key={c.id} value={c.name || (c as any).title}>
-                  {c.name || (c as any).title || "Chương chưa đặt tên"}
+              {filterChapterOptions.map(opt => (
+                <option key={opt.id || opt.name} value={opt.name}>
+                  {opt.name} {opt.lessonCount > 0 ? `(${opt.lessonCount} bài)` : ''}
                 </option>
               ))}
             </select>
@@ -419,7 +551,7 @@ export default function LessonManager({
 
                 <button
                   onClick={() => {
-                    const ch = chapters.find(c => c.id === group.chapterId || c.name === group.chapterName);
+                    const ch = chapters.find(c => c.id === group.chapterId || matchLessonToChapterFilter({ grade: group.grade, chapterName: group.chapterName }, c.name, chapters));
                     handleOpenAddModal(ch || { id: group.chapterId, grade: group.grade, name: group.chapterName, order: 0 });
                   }}
                   className="text-[10px] font-black uppercase text-blue-600 hover:text-blue-800 flex items-center gap-1 px-3 py-1 rounded-lg hover:bg-blue-50 transition-colors"
