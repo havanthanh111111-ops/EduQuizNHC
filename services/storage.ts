@@ -1069,8 +1069,17 @@ export const getChapters = async (forceRefresh: boolean = false): Promise<Chapte
   }
   
   const fetchPromise = async (): Promise<Chapter[]> => {
-    const { data } = await supabase.from('chapters').select('data');
-    const result = data ? data.map((row: any) => row.data as Chapter).sort((a: Chapter, b: Chapter) => a.order - b.order) : [];
+    const { data, error } = await supabase.from('chapters').select('id, grade, data');
+    if (error) {
+      console.warn("Lỗi getChapters:", error);
+      return [];
+    }
+    const result = data 
+      ? data
+          .filter((row: any) => row.id !== 'system_lessons_registry' && !row.data?.isSystemRegistry && row.data?.name)
+          .map((row: any) => row.data as Chapter)
+          .sort((a: Chapter, b: Chapter) => (a.order || 0) - (b.order || 0)) 
+      : [];
     memoryCache[cacheKey] = { data: result, expires: Date.now() + CACHE_TTL };
     return result;
   };
@@ -1089,7 +1098,7 @@ export const deleteChapter = async (id: string): Promise<void> => {
   if (supabase) await supabase.from('chapters').delete().eq('id', id);
 };
 
-// --- Lessons (Quản lý bài học thuộc chương) ---
+// --- Lessons (Quản lý bài học thuộc chương - Lưu trữ Cloud CSDL Supabase) ---
 export const getLessons = async (forceRefresh: boolean = false): Promise<Lesson[]> => {
   const cacheKey = 'lessons_all';
   const now = Date.now();
@@ -1100,21 +1109,140 @@ export const getLessons = async (forceRefresh: boolean = false): Promise<Lesson[
   const fetchPromise = async (): Promise<Lesson[]> => {
     let dbLessons: Lesson[] = [];
     if (supabase) {
+      // 1. Thử đọc từ registry an toàn trong bảng chapters (đã có sẵn trên CSDL Supabase)
       try {
-        const { data, error } = await supabase.from('lessons').select('data');
-        if (!error && data && data.length > 0) {
-          dbLessons = data.map((row: any) => row.data as Lesson);
+        const { data: regRow, error: regError } = await supabase
+          .from('chapters')
+          .select('data')
+          .eq('id', 'system_lessons_registry')
+          .maybeSingle();
+
+        if (!regError && regRow && regRow.data && Array.isArray(regRow.data.lessons)) {
+          dbLessons = regRow.data.lessons as Lesson[];
         }
       } catch (e) {
-        console.warn("Chưa đọc được bảng lessons trên Supabase, fallback sang localStorage:", e);
+        console.warn("Lỗi đọc system_lessons_registry từ Supabase:", e);
+      }
+
+      // 2. Dự phòng: Đọc từ bảng lessons nếu tồn tại
+      if (dbLessons.length === 0) {
+        try {
+          const { data, error } = await supabase.from('lessons').select('data');
+          if (!error && data && data.length > 0) {
+            dbLessons = data.map((row: any) => row.data as Lesson);
+          }
+        } catch (e) {}
       }
     }
-    if (dbLessons.length === 0) {
-      try {
-        const local = localStorage.getItem('eduquiz_lessons_cache');
-        if (local) dbLessons = JSON.parse(local);
-      } catch (e) {}
+
+    // 3. Khôi phục từ localStorage nếu Supabase chưa có (ví dụ người dùng vừa thêm bài lúc trước)
+    let localLessons: Lesson[] = [];
+    try {
+      const local = localStorage.getItem('eduquiz_lessons_cache');
+      if (local) localLessons = JSON.parse(local);
+    } catch (e) {}
+
+    // Hợp nhất dữ liệu giữa LocalStorage và Supabase để không bao giờ bị mất bài
+    if (localLessons.length > 0) {
+      const map = new Map<string, Lesson>();
+      dbLessons.forEach(l => map.set(l.id, l));
+      let hasNew = false;
+      localLessons.forEach(l => {
+        if (!map.has(l.id)) {
+          map.set(l.id, l);
+          hasNew = true;
+        }
+      });
+      dbLessons = Array.from(map.values());
+
+      // Nếu local có bài học chưa kịp đẩy lên Supabase -> đẩy ngay lên Cloud
+      if (hasNew && supabase && dbLessons.length > 0) {
+        supabase.from('chapters').upsert({
+          id: 'system_lessons_registry',
+          grade: 'all',
+          data: {
+            id: 'system_lessons_registry',
+            isSystemRegistry: true,
+            updatedAt: new Date().toISOString(),
+            lessons: dbLessons
+          }
+        }).catch((e: any) => console.warn("Lỗi tự động sao lưu lessons lên Supabase:", e));
+      }
     }
+
+    // 4. Nếu hoàn toàn rỗng, nạp danh mục bài học mẫu chuẩn Vercel và GitHub Vật lí 12
+    if (dbLessons.length === 0) {
+      dbLessons = [
+        {
+          id: 'lesson_12_c1_b1',
+          grade: '12',
+          chapterId: 'e695e00c-ad6b-4894-9a10-05e04ad5649f',
+          chapterName: 'Chương 1: vật lý nhiệt',
+          title: 'Bài 1: Cấu trúc của chất. Sự chuyển thể',
+          url: 'https://website1975.github.io/vatly12/chuong1/Suchuyenthe.html',
+          defaultKeyConcept: 'Mô hình động học phân tử về cấu tạo chất có những nội dung cơ bản sau:\n- Các chất được cấu tạo từ các hạt riêng biệt là phân tử.\n- Các phân tử chuyển động không ngừng.\n- Giữa các phân tử có lực tương tác (hút và đẩy).'
+        },
+        {
+          id: 'lesson_12_c1_b2',
+          grade: '12',
+          chapterId: 'e695e00c-ad6b-4894-9a10-05e04ad5649f',
+          chapterName: 'Chương 1: vật lý nhiệt',
+          title: 'Bài 2: Nội năng. Định luật 1 Nhiệt động lực học',
+          url: 'https://website1975.github.io/vatly12/chuong1/Noinang.html',
+          defaultKeyConcept: '1/ Nội năng là tổng động năng và thế năng của các phân tử cấu tạo nên vật: $U = f(T, V)$.\n2/ Định luật 1 Nhiệt động lực học: $\\Delta U = Q + A$\n- $Q > 0$: Vật nhận nhiệt lượng; $Q < 0$: Vật truyền nhiệt lượng.\n- $A > 0$: Vật nhận công; $A < 0$: Vật thực hiện công.'
+        },
+        {
+          id: 'lesson_12_c1_b3',
+          grade: '12',
+          chapterId: 'e695e00c-ad6b-4894-9a10-05e04ad5649f',
+          chapterName: 'Chương 1: vật lý nhiệt',
+          title: 'Bài 3: Nhiệt dung riêng',
+          url: 'https://website1975.github.io/vatly12/chuong1/nhietdungrieng.html',
+          defaultKeyConcept: '1/ Nhiệt lượng giúp vật liệu thay đổi nhiệt $\\Delta T$:\n$$Q = m \\cdot c \\cdot \\Delta T$$\n- $c$: Nhiệt dung riêng của chất ($J/(kg \\cdot K)$).\n- Đo nhiệt dung riêng bằng phương pháp nhiệt lượng kế.'
+        },
+        {
+          id: 'lesson_12_c1_b4',
+          grade: '12',
+          chapterId: 'e695e00c-ad6b-4894-9a10-05e04ad5649f',
+          chapterName: 'Chương 1: vật lý nhiệt',
+          title: 'Bài 4: Sự nóng chảy và sự sôi. Nhiệt nóng chảy riêng',
+          url: 'https://website1975.github.io/vatly12/chuong1/nhietnongchay.html',
+          defaultKeyConcept: '1/ Nhiệt nóng chảy: $Q = \\lambda \\cdot m$ ($\\lambda$: Nhiệt nóng chảy riêng $J/kg$).\n2/ Nhiệt hóa hơi: $Q = L \\cdot m$ ($L$: Nhiệt hóa hơi riêng $J/kg$).'
+        },
+        {
+          id: 'lesson_10_c1_b1',
+          grade: '10',
+          chapterId: 'ch_10_c1',
+          chapterName: 'Chương 1: Mở đầu & Động học',
+          title: 'Bài 1: Làm quen với Vật lí',
+          url: 'https://hethonghoctap-nhc.vercel.app/student?subject=10&node=g10-1780405969901',
+          defaultKeyConcept: '1/ Đối tượng nghiên cứu của Vật lí: các dạng vận động của vật chất và năng lượng.\n2/ Sai số tỉ đối: $\\delta A = \\frac{\\Delta A}{\\bar{A}} \\times 100\\%$'
+        },
+        {
+          id: 'lesson_11_c1_b1',
+          grade: '11',
+          chapterId: 'ch_11_c1',
+          chapterName: 'Chương 1: Dao động',
+          title: 'Bài 1: Mô tả dao động điều hòa',
+          url: 'https://hethonghoctap-nhc.vercel.app/student?subject=11&node=g11-dao-dong-dieu-hoa',
+          defaultKeyConcept: '1/ Phương trình dao động: $x = A\\cos(\\omega t + \\varphi)$\n- Vận tốc: $v = -\\omega A\\sin(\\omega t + \\varphi)$\n- Gia tốc: $a = -\\omega^2 x$'
+        }
+      ];
+
+      if (supabase) {
+        supabase.from('chapters').upsert({
+          id: 'system_lessons_registry',
+          grade: 'all',
+          data: {
+            id: 'system_lessons_registry',
+            isSystemRegistry: true,
+            updatedAt: new Date().toISOString(),
+            lessons: dbLessons
+          }
+        }).catch(() => {});
+      }
+    }
+
     memoryCache[cacheKey] = { data: dbLessons, expires: Date.now() + CACHE_TTL };
     try {
       localStorage.setItem('eduquiz_lessons_cache', JSON.stringify(dbLessons));
@@ -1123,29 +1251,73 @@ export const getLessons = async (forceRefresh: boolean = false): Promise<Lesson[
   };
 
   const cached = memoryCache[cacheKey]?.data || [];
-  return withTimeout(fetchPromise(), 5000, cached);
+  return withTimeout(fetchPromise(), 6000, cached);
 };
 
 export const saveLesson = async (l: Lesson): Promise<void> => {
   invalidateCache('lessons_all');
+  
+  // 1. Cập nhật localStorage
+  let currentList: Lesson[] = [];
   try {
-    const list = await getLessons(true);
-    const idx = list.findIndex(item => item.id === l.id);
-    if (idx >= 0) list[idx] = l;
-    else list.push(l);
-    localStorage.setItem('eduquiz_lessons_cache', JSON.stringify(list));
+    const local = localStorage.getItem('eduquiz_lessons_cache');
+    if (local) currentList = JSON.parse(local);
+  } catch (e) {}
+  
+  const idx = currentList.findIndex(item => item.id === l.id);
+  if (idx >= 0) currentList[idx] = l;
+  else currentList.push(l);
+  try {
+    localStorage.setItem('eduquiz_lessons_cache', JSON.stringify(currentList));
   } catch (e) {}
 
+  // 2. Lưu trực tiếp vào Cloud CSDL Supabase
   if (supabase) {
     try {
-      await supabase.from('lessons').upsert({
-        id: l.id,
-        grade: l.grade,
-        chapter_id: l.chapterId,
-        data: l
+      const { data: regRow } = await supabase
+        .from('chapters')
+        .select('data')
+        .eq('id', 'system_lessons_registry')
+        .maybeSingle();
+
+      let remoteList: Lesson[] = [];
+      if (regRow && regRow.data && Array.isArray(regRow.data.lessons)) {
+        remoteList = regRow.data.lessons;
+      } else {
+        remoteList = currentList;
+      }
+
+      const rIdx = remoteList.findIndex(item => item.id === l.id);
+      if (rIdx >= 0) remoteList[rIdx] = l;
+      else remoteList.push(l);
+
+      const { error: upsertErr } = await supabase.from('chapters').upsert({
+        id: 'system_lessons_registry',
+        grade: 'all',
+        data: {
+          id: 'system_lessons_registry',
+          isSystemRegistry: true,
+          updatedAt: new Date().toISOString(),
+          lessons: remoteList
+        }
       });
+      if (upsertErr) {
+        console.warn("Lỗi lưu lessons vào Supabase:", upsertErr);
+      } else {
+        console.log(`[Supabase] Đã lưu thành công bài học "${l.title}" vào CSDL!`);
+      }
+
+      // Thử đồng thời bảng lessons nếu có
+      try {
+        await supabase.from('lessons').upsert({
+          id: l.id,
+          grade: l.grade,
+          chapter_id: l.chapterId,
+          data: l
+        });
+      } catch (e) {}
     } catch (e) {
-      console.warn("Lưu lessons vào Supabase:", e);
+      console.warn("Lỗi lưu lessons vào Supabase:", e);
     }
   }
 };
@@ -1156,14 +1328,24 @@ export const deleteLesson = async (id: string): Promise<void> => {
     const list = await getLessons(true);
     const updated = list.filter(item => item.id !== id);
     localStorage.setItem('eduquiz_lessons_cache', JSON.stringify(updated));
-  } catch (e) {}
 
-  if (supabase) {
-    try {
-      await supabase.from('lessons').delete().eq('id', id);
-    } catch (e) {
-      console.warn("Xóa lesson trên Supabase:", e);
+    if (supabase) {
+      await supabase.from('chapters').upsert({
+        id: 'system_lessons_registry',
+        grade: 'all',
+        data: {
+          id: 'system_lessons_registry',
+          isSystemRegistry: true,
+          updatedAt: new Date().toISOString(),
+          lessons: updated
+        }
+      });
+      try {
+        await supabase.from('lessons').delete().eq('id', id);
+      } catch (e) {}
     }
+  } catch (e) {
+    console.warn("Lỗi xóa bài học:", e);
   }
 };
 
@@ -1177,20 +1359,21 @@ export const saveLessonsBatch = async (lessonsList: Lesson[]): Promise<void> => 
     lessonsList.forEach(l => map.set(l.id, l));
     const merged = Array.from(map.values());
     localStorage.setItem('eduquiz_lessons_cache', JSON.stringify(merged));
-  } catch (e) {}
 
-  if (supabase) {
-    try {
-      const payload = lessonsList.map(l => ({
-        id: l.id,
-        grade: l.grade,
-        chapter_id: l.chapterId,
-        data: l
-      }));
-      await supabase.from('lessons').upsert(payload);
-    } catch (e) {
-      console.warn("Lưu batch lessons vào Supabase:", e);
+    if (supabase) {
+      await supabase.from('chapters').upsert({
+        id: 'system_lessons_registry',
+        grade: 'all',
+        data: {
+          id: 'system_lessons_registry',
+          isSystemRegistry: true,
+          updatedAt: new Date().toISOString(),
+          lessons: merged
+        }
+      });
     }
+  } catch (e) {
+    console.warn("Lỗi lưu lessons batch:", e);
   }
 };
 
