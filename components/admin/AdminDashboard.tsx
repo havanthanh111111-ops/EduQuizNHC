@@ -213,11 +213,17 @@ export default function AdminDashboard() {
           }
         }
       } else if (tab === 'classes') {
-        const [cls, c] = await Promise.all([
+        const [cls, allUsers, q, r, c] = await Promise.all([
           getClasses(forceRefresh),
+          getUsers(forceRefresh),
+          getQuizzesMetadata('all', forceRefresh),
+          getResultsMetadata('all', 300, forceRefresh),
           getChapters(forceRefresh)
         ]);
         setClasses(cls || []);
+        setStudents((allUsers || []).filter(user => user.role === 'student'));
+        setQuizzes(q || []);
+        setResults(r || []);
         setChapters(c || []);
       } else if (tab === 'students') {
         const [paged, cls] = await Promise.all([
@@ -1633,9 +1639,10 @@ export default function AdminDashboard() {
               quizzes={quizzes}
               results={results}
               chapters={chapters}
+              isLoading={isDataLoading}
               onSaveClass={async (c) => {
                 await saveClass(c);
-                await loadTabData('classes');
+                await loadTabData('classes', true);
               }}
               onDeleteClass={async (id, name) => {
                 showConfirm(
@@ -1643,15 +1650,15 @@ export default function AdminDashboard() {
                   `Bạn có chắc chắn muốn xóa lớp "${name}" không? Học sinh thuộc lớp này sẽ không bị xóa khỏi hệ thống mà chỉ gỡ liên kết lớp.`,
                   async () => {
                     await deleteClass(id);
-                    await loadTabData('classes');
+                    await loadTabData('classes', true);
                   }
                 );
               }}
               onAssignStudents={async (studentIds, classInfo) => {
                 await assignStudentsToClass(studentIds, classInfo);
-                await loadTabData('classes');
+                await loadTabData('classes', true);
               }}
-              onRefresh={() => loadTabData('classes')}
+              onRefresh={() => loadTabData('classes', true)}
               onPreviewQuiz={handlePreviewQuiz}
             />
           )}
