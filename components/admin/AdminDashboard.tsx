@@ -217,7 +217,7 @@ export default function AdminDashboard() {
           getClasses(forceRefresh),
           getUsers(forceRefresh),
           getQuizzesMetadata('all', forceRefresh),
-          getResultsMetadata('all', 300, forceRefresh),
+          getResultsMetadata('all', 3000, forceRefresh),
           getChapters(forceRefresh)
         ]);
         setClasses(cls || []);
@@ -236,16 +236,18 @@ export default function AdminDashboard() {
         setStudentsPage(1);
         setClasses(cls || []);
       } else if (tab === 'results') {
-        const [paged, q, cls] = await Promise.all([
+        const [paged, q, cls, allUsers] = await Promise.all([
           getResultsMetadataPage(1, 50),
           getQuizzesMetadata('all', forceRefresh),
-          getClasses(forceRefresh)
+          getClasses(forceRefresh),
+          getUsers(forceRefresh)
         ]);
         setResults(paged.data);
         setResultsTotal(paged.total);
         setResultsPage(1);
         setQuizzes(q || []);
         setClasses(cls || []);
+        setStudents((allUsers || []).filter(user => user.role === 'student'));
       } else if (tab === 'bank') {
         const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : '12';
         const [b, c] = await Promise.all([
