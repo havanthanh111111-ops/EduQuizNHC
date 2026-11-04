@@ -1698,16 +1698,30 @@ export const getBankQuestionsPage = async (
             query = query.or(`data->>quizGrade.eq.${gradeFilter},data->>grade.eq.${gradeFilter}`);
         }
 
+        if (chapterFilter && chapterFilter !== 'all') {
+            let kw = chapterFilter.replace(/^chương\s*\d+\s*[:\-]\s*/i, '').trim();
+            kw = kw.replace(/l[íy]/gi, 'l_');
+            if (kw) {
+                query = query.or(`data->>chapterName.ilike.%${kw}%,data->>quizCategory.ilike.%${kw}%`);
+            } else {
+                query = query.or(`data->>chapterName.ilike.%${chapterFilter.trim()}%,data->>quizCategory.ilike.%${chapterFilter.trim()}%`);
+            }
+        }
+
         if (typeFilter && typeFilter !== 'all') {
-            query = query.eq('data->>type', typeFilter);
+            if (typeFilter === 'group-tf' || (typeFilter as string) === 'group_tf') {
+                query = query.or('data->>type.eq.group-tf,data->>type.eq.group_tf');
+            } else {
+                query = query.eq('data->>type', typeFilter);
+            }
         }
 
         if (levelFilter && levelFilter !== 'all') {
             query = query.eq('data->>level', levelFilter);
         }
 
-        if (search) {
-            query = query.ilike('data->>text', `%${search}%`);
+        if (search && search.trim()) {
+            query = query.ilike('data->>text', `%${search.trim()}%`);
         }
 
         const { data, count, error } = await query
@@ -1716,14 +1730,7 @@ export const getBankQuestionsPage = async (
 
         if (error) throw error;
 
-        let questions = data ? data.map((row: any) => row.data as Question) : [];
-        if (chapterFilter && chapterFilter !== 'all') {
-            const lowerCh = chapterFilter.toLowerCase();
-            questions = questions.filter((q: Question) => 
-                (q.chapterName && q.chapterName.toLowerCase().includes(lowerCh)) ||
-                (q.quizCategory && q.quizCategory.toLowerCase().includes(lowerCh))
-            );
-        }
+        const questions = data ? data.map((row: any) => row.data as Question) : [];
         return { data: questions, total: count || 0 };
     } catch (e) {
         console.error("Lỗi getBankQuestionsPage:", e);
