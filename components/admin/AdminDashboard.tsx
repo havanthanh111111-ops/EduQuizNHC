@@ -213,17 +213,15 @@ export default function AdminDashboard() {
           }
         }
       } else if (tab === 'classes') {
-        const [cls, allUsers, q, r, c] = await Promise.all([
+        const [cls, allUsers, q, c] = await Promise.all([
           getClasses(forceRefresh),
           getUsers(forceRefresh),
           getQuizzesMetadata('all', forceRefresh),
-          getResultsMetadata('all', 3000, forceRefresh),
           getChapters(forceRefresh)
         ]);
         setClasses(cls || []);
         setStudents((allUsers || []).filter(user => user.role === 'student'));
         setQuizzes(q || []);
-        setResults(r || []);
         setChapters(c || []);
       } else if (tab === 'students') {
         const [paged, cls] = await Promise.all([
