@@ -28,7 +28,7 @@ import {
 } from 'recharts';
 import { v4 as uuidv4 } from 'uuid';
 import { format } from 'date-fns';
-import { getQuizById } from '../../services/storage';
+import { getQuizById, getResultsMetadata } from '../../services/storage';
 import QuizPreviewModal from './QuizPreviewModal';
 
 // Hàm chuẩn hóa so khớp học sinh thuộc lớp chính xác & linh hoạt
@@ -239,6 +239,38 @@ export default function ClassManager({
     return filteredClassQuizzes[0];
   }, [filteredClassQuizzes, selectedQuizId]);
 
+  // Tab 2: Dữ liệu kết quả chi tiết của riêng đề thi đang chọn (tải trực tiếp từ CSDL để không bao giờ bị cắt xén do giới hạn tổng)
+  const [currentQuizResults, setCurrentQuizResults] = useState<Result[]>([]);
+  const [isQuizResultsLoading, setIsQuizResultsLoading] = useState(false);
+
+  React.useEffect(() => {
+    let isCancelled = false;
+    if (!currentQuiz?.id) {
+      setCurrentQuizResults([]);
+      return;
+    }
+
+    const fetchQuizResults = async () => {
+      setIsQuizResultsLoading(true);
+      try {
+        const fullQuizResults = await getResultsMetadata(currentQuiz.id, 1000, true);
+        if (!isCancelled) {
+          setCurrentQuizResults(fullQuizResults || []);
+        }
+      } catch (err) {
+        console.warn("Lỗi tải kết quả đề thi cho lớp:", err);
+      } finally {
+        if (!isCancelled) setIsQuizResultsLoading(false);
+      }
+    };
+
+    fetchQuizResults();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentQuiz?.id]);
+
   // Tab 2: Detailed Quiz Performance based on FIRST ATTEMPT (Lần 1)
   const quizAttemptStats = useMemo(() => {
     if (!currentQuiz || !selectedClass) {
@@ -254,7 +286,11 @@ export default function ClassManager({
       };
     }
 
-    const quizResults = results.filter(r => r.quizId === currentQuiz.id);
+    // Ưu tiên dùng dữ liệu đầy đủ tải riêng theo đề thi hiện tại, nếu chưa nạp xong thì tạm thời dùng results tổng
+    const quizResults = currentQuizResults.length > 0 
+      ? currentQuizResults 
+      : results.filter(r => r.quizId === currentQuiz.id);
+
     const submittedList: Array<{
       student: User;
       firstAttempt: Result;
@@ -266,7 +302,8 @@ export default function ClassManager({
     classStudents.forEach(student => {
       const studentResults = quizResults.filter(r => 
         r.studentId === student.id || 
-        (student.studentCode && r.studentCode && r.studentCode.trim().toUpperCase() === student.studentCode.trim().toUpperCase())
+        (student.studentCode && r.studentCode && r.studentCode.trim().toUpperCase() === student.studentCode.trim().toUpperCase()) ||
+        (student.username && (r as any).username && (r as any).username.trim().toLowerCase() === student.username.trim().toLowerCase())
       );
 
       if (studentResults.length > 0) {
@@ -332,19 +369,22 @@ export default function ClassManager({
       highestFirstScore: highest,
       lowestFirstScore: totalSub > 0 ? lowest : 0
     };
-  }, [currentQuiz, selectedClass, classStudents, results]);
+  }, [currentQuiz, selectedClass, classStudents, results, currentQuizResults]);
 
   const handleExportClassScoresCsv = () => {
     if (!currentQuiz || classStudents.length === 0) return;
 
-    const quizResults = results.filter(r => r.quizId === currentQuiz.id);
+    const quizResults = currentQuizResults.length > 0 
+      ? currentQuizResults 
+      : results.filter(r => r.quizId === currentQuiz.id);
     const headers = ["STT", "Họ và tên", "Mã học sinh", "Tài khoản", "Điểm lần 1", "Điểm cao nhất", "Số lần làm", "Trạng thái / Chú thích"];
     const rows: string[][] = [];
 
     classStudents.forEach((student, idx) => {
       const studentResults = quizResults.filter(r => 
         r.studentId === student.id || 
-        (student.studentCode && r.studentCode && r.studentCode.trim().toUpperCase() === student.studentCode.trim().toUpperCase())
+        (student.studentCode && r.studentCode && r.studentCode.trim().toUpperCase() === student.studentCode.trim().toUpperCase()) ||
+        (student.username && (r as any).username && (r as any).username.trim().toLowerCase() === student.username.trim().toLowerCase())
       );
 
       let scoreFirst = "0.0";
@@ -1354,7 +1394,7 @@ export default function ClassManager({
                     >
                       {filteredClassQuizzes.map(q => (
                         <option key={q.id} value={q.id}>
-                          {q.title} ({q.type === 'test' ? 'Đề thi' : 'Luyện tập'} - {q.questions?.length || 0} câu)
+                          {q.title} ({q.type === 'test' ? 'Đề thi' : 'Luyện tập'} - {q.questionCount || (q.questions ? q.questions.length : 0)} câu)
                         </option>
                       ))}
                     </select>
@@ -1508,7 +1548,10 @@ export default function ClassManager({
 
                       {/* Đã nộp bài */}
                       <div className="bg-white/90 p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-                        <span className="text-[9px] font-black uppercase text-slate-400 block mb-0.5">Đã nộp bài</span>
+                        <span className="text-[9px] font-black uppercase text-slate-400 block mb-0.5 flex items-center justify-between">
+                          <span>Đã nộp bài</span>
+                          {isQuizResultsLoading && <Loader2 size={11} className="animate-spin text-indigo-500" />}
+                        </span>
                         <span className="font-black text-emerald-700 flex items-center gap-1.5 text-xs">
                           <Users size={13} className="text-emerald-500" />
                           {quizAttemptStats.submittedStudents.length} / {classStudents.length} HS ({classStudents.length > 0 ? Math.round((quizAttemptStats.submittedStudents.length / classStudents.length) * 100) : 0}%)
