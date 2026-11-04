@@ -239,13 +239,20 @@ export default function ClassManager({
     return filteredClassQuizzes[0];
   }, [filteredClassQuizzes, selectedQuizId]);
 
-  // Tab 2: Dữ liệu kết quả chi tiết của riêng đề thi đang chọn (tải trực tiếp từ CSDL để không bao giờ bị cắt xén do giới hạn tổng)
+  // Tab 2: Dữ liệu kết quả chi tiết của riêng đề thi đang chọn (chỉ tải khi giáo viên mở Tab 2)
   const [currentQuizResults, setCurrentQuizResults] = useState<Result[]>([]);
   const [isQuizResultsLoading, setIsQuizResultsLoading] = useState(false);
 
+  // Tab 3: Dữ liệu kết quả tổng hợp của lớp (chỉ tải khi giáo viên mở Tab 3)
+  const [classProgressResults, setClassProgressResults] = useState<Result[]>([]);
+  const [isClassProgressLoading, setIsClassProgressLoading] = useState(false);
+
   React.useEffect(() => {
     let isCancelled = false;
-    if (!currentQuiz?.id) {
+    // TIẾT KIỆM BĂNG THÔNG TUYỆT ĐỐI:
+    // Tuyệt đối không tải kết quả khi chỉ xem danh sách các thẻ lớp (View 1) hoặc đang ở Tab 1 (Danh sách HS)!
+    // Chỉ tải khi giáo viên đã click chọn lớp và đang chủ động mở Tab 2 (Thống kê đề thi).
+    if (!selectedClass || activeTab !== 'stats' || !currentQuiz?.id) {
       setCurrentQuizResults([]);
       return;
     }
@@ -253,7 +260,7 @@ export default function ClassManager({
     const fetchQuizResults = async () => {
       setIsQuizResultsLoading(true);
       try {
-        const fullQuizResults = await getResultsMetadata(currentQuiz.id, 1000, true);
+        const fullQuizResults = await getResultsMetadata(currentQuiz.id, 500, true);
         if (!isCancelled) {
           setCurrentQuizResults(fullQuizResults || []);
         }
@@ -269,7 +276,35 @@ export default function ClassManager({
     return () => {
       isCancelled = true;
     };
-  }, [currentQuiz?.id]);
+  }, [selectedClass?.id, activeTab, currentQuiz?.id]);
+
+  React.useEffect(() => {
+    let isCancelled = false;
+    // Chỉ tải kết quả tổng hợp lớp khi giáo viên chủ động mở Tab 3 (Kết quả rèn luyện)
+    if (!selectedClass || activeTab !== 'progress') {
+      return;
+    }
+
+    const fetchClassProgress = async () => {
+      setIsClassProgressLoading(true);
+      try {
+        const pResults = await getResultsMetadata(undefined, 1000, false);
+        if (!isCancelled) {
+          setClassProgressResults(pResults || []);
+        }
+      } catch (err) {
+        console.warn("Lỗi tải kết quả rèn luyện của lớp:", err);
+      } finally {
+        if (!isCancelled) setIsClassProgressLoading(false);
+      }
+    };
+
+    fetchClassProgress();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedClass?.id, activeTab]);
 
   // Tab 2: Detailed Quiz Performance based on FIRST ATTEMPT (Lần 1)
   const quizAttemptStats = useMemo(() => {
@@ -430,9 +465,11 @@ export default function ClassManager({
 
   // Tab 3: Helper to calculate student progress statistics & automated feedback
   const getStudentTrainingData = (student: User) => {
-    const studentResults = results.filter(r => 
+    const activeResults = classProgressResults.length > 0 ? classProgressResults : results;
+    const studentResults = activeResults.filter(r => 
       r.studentId === student.id || 
-      (student.studentCode && r.studentCode && r.studentCode.trim().toUpperCase() === student.studentCode.trim().toUpperCase())
+      (student.studentCode && r.studentCode && r.studentCode.trim().toUpperCase() === student.studentCode.trim().toUpperCase()) ||
+      (student.username && (r as any).username && (r as any).username.trim().toLowerCase() === student.username.trim().toLowerCase())
     );
 
     const totalSeconds = studentResults.reduce((acc, r) => acc + (r.durationSeconds || 0), 0);
