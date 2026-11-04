@@ -150,7 +150,7 @@ export const getResultsMetadataPage = async (page: number, pageSize: number = 50
   }
 };
 
-export const getResultsMetadata = async (quizId?: string, maxRecords: number = 200, forceRefresh: boolean = false): Promise<Result[]> => {
+export const getResultsMetadata = async (quizId?: string, maxRecords: number = 3000, forceRefresh: boolean = false): Promise<Result[]> => {
   if (!supabase) return [];
   const cacheKey = `results_meta_${quizId || 'all'}_${maxRecords}`;
   const now = Date.now();
@@ -160,12 +160,13 @@ export const getResultsMetadata = async (quizId?: string, maxRecords: number = 2
   try {
       let query = supabase.from('results')
         .select('id, quiz_id, student_id, data')
-        .order('id', { ascending: false })
-        .limit(maxRecords);
+        .order('id', { ascending: false });
         
       if (quizId && quizId !== 'all') {
         query = query.or(`quiz_id.eq.${quizId},data->>quizId.eq.${quizId}`);
       }
+
+      query = query.limit(maxRecords);
       
       const { data, error } = await query;
       if (error) {
