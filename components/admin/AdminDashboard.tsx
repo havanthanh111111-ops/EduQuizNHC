@@ -21,7 +21,7 @@ import {
 } from '../../services/storage';
 import { generateQuizFromPrompt, parseQuestionsFromPDF, parseQuestionsFromText } from '../../services/gemini';
 import { normalizeFullText } from '../../services/vietnameseFixer';
-import { Quiz, User, Result, Chapter, Question, QuestionType, Grade, QuizType, Role, ClassRoom, QuizFolder, Lesson } from '../../types';
+import { Quiz, User, Result, Chapter, Question, QuestionType, QuestionLevel, Grade, QuizType, Role, ClassRoom, QuizFolder, Lesson } from '../../types';
 import { v4 as uuidv4 } from 'uuid';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Papa from 'papaparse';
@@ -335,20 +335,26 @@ export default function AdminDashboard() {
         }
         if (c) setChapters(c);
       } else if (tab === 'bank') {
-        const targetGrade = bGradeFilter !== 'all' ? bGradeFilter : '12';
-        const [b, c] = await Promise.all([
-          getBankQuestions(targetGrade, forceRefresh),
-          getChapters(forceRefresh)
-        ]);
-        setBankQuestions(b || []);
-        setChapters(c || []);
-        // Tự động chọn chương đầu tiên của khối nếu chưa khớp
-        if (c && c.length > 0) {
-          const gradeChapters = c.filter((ch: Chapter) => String(ch.grade) === String(targetGrade));
-          if (gradeChapters.length > 0 && (!bChapterFilter || bChapterFilter === 'all')) {
-            setBChapterFilter(gradeChapters[0].name);
-          }
-        }
+        const c = chaptersRef.current.length > 0 ? chaptersRef.current : await getChapters(forceRefresh);
+        if (c && c.length > 0) setChapters(c);
+
+        // Thống nhất bộ lọc chuẩn mặc định: Khối 12, Chương 1: vật lý nhiệt, Trắc nghiệm MCQ, Mức độ Biết [B]
+        const targetGrade = '12';
+        setBGradeFilter('12');
+
+        const g12Ch1 = c?.find((ch: Chapter) => String(ch.grade) === '12' && (/nhiệt/i.test(ch.name || '') || ch.name?.includes('1')));
+        const targetChapter = g12Ch1?.name || 'Chương 1: vật lý nhiệt';
+        setBChapterFilter(targetChapter);
+        setBTypeFilter('mcq');
+        setBLevelFilter('B');
+        setBSearch('');
+        setBPage(1);
+        lastBankQueryRef.current = `12_${targetChapter}_mcq_B__1`;
+
+        // Chỉ nạp đúng 1 trang 40 câu cho bộ lọc mặc định này (chỉ ~20 KB thay vì nạp cả ngàn câu)
+        const paged = await getBankQuestionsPage(1, 40, '12', targetChapter, 'mcq', 'B', '');
+        setBankQuestions(paged.data);
+        setBankTotal(paged.total);
       } else if (tab === 'ai') {
         // Soạn đề AI: HOÀN TOÀN KHÔNG NẠP DỮ LIỆU NGÂN HÀNG KHI MỞ MENU ĐỂ TIẾT KIỆM 100% BĂNG THÔNG!
         const c = await getChapters(forceRefresh);
@@ -594,11 +600,12 @@ export default function AdminDashboard() {
   }, [sSearch, activeTab]);
 
   const [bGradeFilter, setBGradeFilter] = useState<Grade | 'all'>('12');
-  const [bChapterFilter, setBChapterFilter] = useState('Chương 1: Vật lí nhiệt');
+  const [bChapterFilter, setBChapterFilter] = useState('Chương 1: vật lý nhiệt');
   const [bTypeFilter, setBTypeFilter] = useState<QuestionType | 'all'>('mcq');
-  const [bLevelFilter, setBLevelFilter] = useState<string>('H');
+  const [bLevelFilter, setBLevelFilter] = useState<QuestionLevel | 'all'>('B');
   const [bSearch, setBSearch] = useState('');
   const [bPage, setBPage] = useState(1);
+  const lastBankQueryRef = useRef<string>('');
 
   // Alert and Confirmation Modal State
   const [alertModal, setAlertModal] = useState<{
@@ -674,54 +681,59 @@ export default function AdminDashboard() {
 
   const loadBankDataIfNeeded = useCallback(async (grade?: Grade | 'all', forceRefresh: boolean = false) => {
     if (!isDatabaseConnected()) return;
-    const targetGrade = grade || quizGrade || (bGradeFilter !== 'all' ? bGradeFilter : 'all');
+    const targetGrade = grade || quizGrade || (bGradeFilter !== 'all' ? bGradeFilter : '12');
     setIsBankLoading(true);
     try {
-      const [b, c] = await Promise.all([
-        getBankQuestions(targetGrade === 'all' ? 'all' : targetGrade, forceRefresh),
-        getChapters(forceRefresh)
+      const [paged, c] = await Promise.all([
+        getBankQuestionsPage(1, 40, targetGrade, bChapterFilter, bTypeFilter, bLevelFilter, bSearch),
+        chaptersRef.current.length > 0 ? Promise.resolve(chaptersRef.current) : getChapters(forceRefresh)
       ]);
-      setBankQuestions(prev => {
-        const map = new Map<string, Question>();
-        prev.forEach((item, idx) => map.set(item.id || `q_prev_${idx}`, item));
-        b.forEach((item, idx) => map.set(item.id || `q_new_${idx}`, item));
-        return Array.from(map.values());
-      });
+      setBankQuestions(paged.data);
+      setBankTotal(paged.total);
       if (c && c.length > 0) setChapters(c);
     } catch (e) {
       console.error("Lỗi tải ngân hàng câu hỏi:", e);
     } finally {
       setIsBankLoading(false);
     }
-  }, [bGradeFilter, quizGrade]);
+  }, [bGradeFilter, bChapterFilter, bTypeFilter, bLevelFilter, bSearch, quizGrade]);
 
   const allAvailableQuestions = useMemo(() => {
-    const map = new Map<string, Question>();
-    // 1. Toàn bộ câu hỏi từ bảng ngân hàng bank_questions
-    bankQuestions.forEach((item, idx) => {
-      map.set(item.id || `bank_${idx}`, item);
-    });
-    // 2. Tự động hợp nhất toàn bộ câu hỏi từ tất cả các đề thi trong CSDL (>1000 câu)
-    quizzes.forEach(quiz => {
-      if (quiz.questions && Array.isArray(quiz.questions)) {
-        quiz.questions.forEach((q, idx) => {
-          const key = q.id || `quiz_${quiz.id}_${idx}`;
-          if (!map.has(key)) {
-            map.set(key, {
-              ...q,
-              quizGrade: q.quizGrade || quiz.grade,
-              chapterName: q.chapterName || quiz.category,
-              quizTitle: q.quizTitle || quiz.title
-            });
-          }
-        });
-      }
-    });
-    return Array.from(map.values());
-  }, [bankQuestions, quizzes]);
+    return bankQuestions;
+  }, [bankQuestions]);
 
-  // Đã tối ưu hóa tải trong loadTabData tránh gọi trùng lặp
-  useEffect(() => {}, [bGradeFilter]);
+  // Lazy-loading: Tự động nạp đúng 40 câu theo bộ lọc khi người dùng đổi Khối, Chương, Dạng, Mức độ hoặc Số trang
+  useEffect(() => {
+    if (activeTab !== 'bank' && !isBankOpen) return;
+    if (!isDatabaseConnected()) return;
+
+    const currentKey = `${bGradeFilter}_${bChapterFilter}_${bTypeFilter}_${bLevelFilter}_${bSearch}_${bPage}`;
+    if (lastBankQueryRef.current === currentKey) return;
+
+    const timer = setTimeout(async () => {
+      lastBankQueryRef.current = currentKey;
+      setIsDataLoading(true);
+      try {
+        const paged = await getBankQuestionsPage(
+          bPage,
+          40,
+          bGradeFilter,
+          bChapterFilter,
+          bTypeFilter,
+          bLevelFilter,
+          bSearch
+        );
+        setBankQuestions(paged.data);
+        setBankTotal(paged.total);
+      } catch (e) {
+        console.error("Lỗi lazy load ngân hàng câu hỏi:", e);
+      } finally {
+        setIsDataLoading(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [activeTab, isBankOpen, bGradeFilter, bChapterFilter, bTypeFilter, bLevelFilter, bSearch, bPage]);
 
   // Quiz Handlers
   const handleCreateQuiz = () => {
@@ -1872,10 +1884,15 @@ export default function AdminDashboard() {
                    </button>
                 </div>
                 <QuestionBank 
-                    questions={allAvailableQuestions} chapters={chapters} bGradeFilter={bGradeFilter} setBGradeFilter={setBGradeFilter}
-                    bChapterFilter={bChapterFilter} setBChapterFilter={setBChapterFilter}
-                    bTypeFilter={bTypeFilter} setBTypeFilter={setBTypeFilter} bSearch={bSearch} setBSearch={setBSearch}
+                    questions={allAvailableQuestions} chapters={chapters} 
+                    bGradeFilter={bGradeFilter} setBGradeFilter={(g) => { setBGradeFilter(g); setBPage(1); }}
+                    bChapterFilter={bChapterFilter} setBChapterFilter={(ch) => { setBChapterFilter(ch); setBPage(1); }}
+                    bTypeFilter={bTypeFilter} setBTypeFilter={(t) => { setBTypeFilter(t); setBPage(1); }}
+                    bLevelFilter={bLevelFilter} setBLevelFilter={(l) => { setBLevelFilter(l); setBPage(1); }}
+                    bSearch={bSearch} setBSearch={(s) => { setBSearch(s); setBPage(1); }}
                     bPage={bPage} setBPage={setBPage}
+                    totalCount={bankTotal}
+                    isLoading={isDataLoading}
                     onAddMultiple={(qs) => { 
                         setQuestions(prev => [...prev, ...qs]); 
                         setActiveTab('quizzes'); 
@@ -1966,11 +1983,14 @@ export default function AdminDashboard() {
                         <QuestionBank 
                             questions={allAvailableQuestions} 
                             chapters={chapters}
-                            bGradeFilter={bGradeFilter} setBGradeFilter={setBGradeFilter}
-                            bChapterFilter={bChapterFilter} setBChapterFilter={setBChapterFilter}
-                            bTypeFilter={bTypeFilter} setBTypeFilter={setBTypeFilter}
-                            bSearch={bSearch} setBSearch={setBSearch}
+                            bGradeFilter={bGradeFilter} setBGradeFilter={(g) => { setBGradeFilter(g); setBPage(1); }}
+                            bChapterFilter={bChapterFilter} setBChapterFilter={(ch) => { setBChapterFilter(ch); setBPage(1); }}
+                            bTypeFilter={bTypeFilter} setBTypeFilter={(t) => { setBTypeFilter(t); setBPage(1); }}
+                            bLevelFilter={bLevelFilter} setBLevelFilter={(l) => { setBLevelFilter(l); setBPage(1); }}
+                            bSearch={bSearch} setBSearch={(s) => { setBSearch(s); setBPage(1); }}
                             bPage={bPage} setBPage={setBPage}
+                            totalCount={bankTotal}
+                            isLoading={isDataLoading}
                             onAddMultiple={(qs) => { 
                                 setQuestions(prev => [...prev, ...qs]); 
                                 setIsBankOpen(false); 
