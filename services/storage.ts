@@ -85,35 +85,30 @@ const handleSupabaseError = (error: any, context: string) => {
     }
 };
 
-// Helper chuẩn hóa & cắt giảm 95% dung lượng cho Metadata Kết quả (loại bỏ hoàn toàn userAnswers và questions khỏi danh sách)
-const mapRowToResultMeta = (row: any): Result => {
-    const d = (row && row.data && typeof row.data === 'object') ? { ...row.data } : (row || {});
-    // Loại bỏ hoàn toàn mảng câu hỏi và câu trả lời chi tiết để giảm tối đa kích thước JSON
-    delete d.userAnswers;
-    delete d.questions;
-    delete d.questionsSnapshot;
-    delete d.answers;
+export const RESULT_METADATA_PROJECTION = 'id,quiz_id,student_id,data->score,data->studentName,data->studentCode,data->durationSeconds,data->submittedAt,data->totalQuestions,data->correctCount,data->wrongCount,data->unansweredCount,data->grade,data->classId,data->className,data->academicYear,data->quizId,data->bonusPoint';
 
+const mapRowToResultMeta = (row: any): Result => {
+    const d = (row && row.data && typeof row.data === 'object') ? row.data : (row || {});
     return {
-        ...d,
         id: String(row.id || d.id || ''),
-        quizId: String(row.quiz_id || d.quizId || ''),
-        studentId: String(row.student_id || d.studentId || ''),
-        studentName: d.studentName || 'Học sinh',
-        studentCode: d.studentCode || 'N/A',
-        score: typeof d.score === 'number' ? d.score : (parseFloat(d.score) || 0),
-        durationSeconds: typeof d.durationSeconds === 'number' ? d.durationSeconds : (parseInt(d.durationSeconds) || 0),
-        submittedAt: d.submittedAt || new Date().toISOString(),
-        totalQuestions: typeof d.totalQuestions === 'number' ? d.totalQuestions : (parseInt(d.totalQuestions) || 0),
-        correctCount: typeof d.correctCount === 'number' ? d.correctCount : (parseInt(d.correctCount) || 0),
-        wrongCount: typeof d.wrongCount === 'number' ? d.wrongCount : (parseInt(d.wrongCount) || 0),
-        unansweredCount: typeof d.unansweredCount === 'number' ? d.unansweredCount : (parseInt(d.unansweredCount) || 0),
-        grade: String(d.grade || '12') as Grade,
-        classId: d.classId || '',
-        className: d.className || '',
-        academicYear: d.academicYear || '',
-        userAnswers: {}, // Không tải userAnswers ở danh sách metadata
-        questions: [] // Không tải questions ở danh sách metadata
+        quizId: String(row.quiz_id || d.quizId || row.quizId || ''),
+        studentId: String(row.student_id || d.studentId || row.studentId || ''),
+        studentName: row.studentName || d.studentName || 'Học sinh',
+        studentCode: row.studentCode || d.studentCode || 'N/A',
+        score: typeof row.score === 'number' ? row.score : (typeof d.score === 'number' ? d.score : (parseFloat(row.score || d.score) || 0)),
+        durationSeconds: typeof row.durationSeconds === 'number' ? row.durationSeconds : (typeof d.durationSeconds === 'number' ? d.durationSeconds : (parseInt(row.durationSeconds || d.durationSeconds) || 0)),
+        submittedAt: row.submittedAt || d.submittedAt || new Date().toISOString(),
+        totalQuestions: typeof row.totalQuestions === 'number' ? row.totalQuestions : (typeof d.totalQuestions === 'number' ? d.totalQuestions : (parseInt(row.totalQuestions || d.totalQuestions) || 0)),
+        correctCount: typeof row.correctCount === 'number' ? row.correctCount : (typeof d.correctCount === 'number' ? d.correctCount : (parseInt(row.correctCount || d.correctCount) || 0)),
+        wrongCount: typeof row.wrongCount === 'number' ? row.wrongCount : (typeof d.wrongCount === 'number' ? d.wrongCount : (parseInt(row.wrongCount || d.wrongCount) || 0)),
+        unansweredCount: typeof row.unansweredCount === 'number' ? row.unansweredCount : (typeof d.unansweredCount === 'number' ? d.unansweredCount : (parseInt(row.unansweredCount || d.unansweredCount) || 0)),
+        grade: String(row.grade || d.grade || '12') as Grade,
+        classId: row.classId || d.classId || '',
+        className: row.className || d.className || '',
+        academicYear: row.academicYear || d.academicYear || '',
+        bonusPoint: row.bonusPoint !== undefined ? row.bonusPoint : d.bonusPoint,
+        userAnswers: {},
+        questions: []
     } as Result;
 };
 
@@ -125,7 +120,7 @@ export const getResultsMetadataPage = async (page: number, pageSize: number = 50
     const to = from + pageSize - 1;
 
     let query = supabase.from('results')
-      .select('id, quiz_id, student_id, data', { count: 'exact' })
+      .select(RESULT_METADATA_PROJECTION, { count: 'exact' })
       .order('id', { ascending: false })
       .range(from, to);
       
@@ -150,7 +145,7 @@ export const getResultsMetadataPage = async (page: number, pageSize: number = 50
   }
 };
 
-export const getResultsMetadata = async (quizId?: string, maxRecords: number = 3000, forceRefresh: boolean = false): Promise<Result[]> => {
+export const getResultsMetadata = async (quizId?: string, maxRecords: number = 1000, forceRefresh: boolean = false): Promise<Result[]> => {
   if (!supabase) return [];
   const cacheKey = `results_meta_${quizId || 'all'}_${maxRecords}`;
   const now = Date.now();
@@ -159,7 +154,7 @@ export const getResultsMetadata = async (quizId?: string, maxRecords: number = 3
   }
   try {
       let query = supabase.from('results')
-        .select('id, quiz_id, student_id, data')
+        .select(RESULT_METADATA_PROJECTION)
         .order('id', { ascending: false });
         
       if (quizId && quizId !== 'all') {
