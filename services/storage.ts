@@ -85,7 +85,7 @@ const handleSupabaseError = (error: any, context: string) => {
     }
 };
 
-export const RESULT_METADATA_PROJECTION = 'id,quiz_id,student_id,data->score,data->studentName,data->studentCode,data->durationSeconds,data->submittedAt,data->totalQuestions,data->correctCount,data->wrongCount,data->unansweredCount,data->grade,data->classId,data->className,data->academicYear,data->quizId,data->bonusPoint';
+export const RESULT_METADATA_PROJECTION = 'id,quiz_id,student_id,data->score,data->studentName,data->studentCode,data->durationSeconds,data->submittedAt,data->totalQuestions,data->correctCount,data->wrongCount,data->unansweredCount,data->grade,data->classId,data->className,data->academicYear,data->quizId,data->quizTitle,data->quizCategory,data->quizType,data->bonusPoint';
 
 const mapRowToResultMeta = (row: any): Result => {
     const d = (row && row.data && typeof row.data === 'object') ? row.data : (row || {});
@@ -95,6 +95,9 @@ const mapRowToResultMeta = (row: any): Result => {
         studentId: String(row.student_id || d.studentId || row.studentId || ''),
         studentName: row.studentName || d.studentName || 'Học sinh',
         studentCode: row.studentCode || d.studentCode || 'N/A',
+        quizTitle: row.quizTitle || d.quizTitle || d.title || '',
+        quizCategory: row.quizCategory || d.quizCategory || d.category || '',
+        quizType: row.quizType || d.quizType || d.type || '',
         score: typeof row.score === 'number' ? row.score : (typeof d.score === 'number' ? d.score : (parseFloat(row.score || d.score) || 0)),
         durationSeconds: typeof row.durationSeconds === 'number' ? row.durationSeconds : (typeof d.durationSeconds === 'number' ? d.durationSeconds : (parseInt(row.durationSeconds || d.durationSeconds) || 0)),
         submittedAt: row.submittedAt || d.submittedAt || new Date().toISOString(),
