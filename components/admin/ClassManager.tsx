@@ -28,7 +28,7 @@ import {
 } from 'recharts';
 import { v4 as uuidv4 } from 'uuid';
 import { format } from 'date-fns';
-import { getQuizById, getResultsMetadata } from '../../services/storage';
+import { getQuizById, getResultsMetadata, getResultsForStudents } from '../../services/storage';
 import QuizPreviewModal from './QuizPreviewModal';
 import * as XLSX from 'xlsx';
 
@@ -418,10 +418,26 @@ export default function ClassManager({
     const fetchClassProgress = async () => {
       setIsClassProgressLoading(true);
       try {
-        const pResults = await getResultsMetadata(undefined, 10000, true);
-        if (!isCancelled && pResults && pResults.length > 0) {
-          cachedClassProgressResults = pResults;
-          setClassProgressResults(pResults);
+        const studentCodes = classStudents.map(s => s.studentCode || '').filter(Boolean);
+        const studentIds = classStudents.map(s => s.id).filter(Boolean);
+
+        const [specificResults, generalResults] = await Promise.all([
+          getResultsForStudents(studentCodes, studentIds),
+          getResultsMetadata(undefined, 3000, true)
+        ]);
+
+        const mergedMap = new Map<string, Result>();
+        if (generalResults && generalResults.length > 0) {
+          generalResults.forEach(r => { if (r && r.id) mergedMap.set(r.id, r); });
+        }
+        if (specificResults && specificResults.length > 0) {
+          specificResults.forEach(r => { if (r && r.id) mergedMap.set(r.id, r); });
+        }
+
+        const finalResults = Array.from(mergedMap.values());
+        if (!isCancelled && finalResults.length > 0) {
+          cachedClassProgressResults = finalResults;
+          setClassProgressResults(finalResults);
         }
       } catch (err) {
         console.warn("Lỗi tải kết quả rèn luyện của lớp:", err);
