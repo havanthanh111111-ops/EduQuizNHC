@@ -85,7 +85,7 @@ const handleSupabaseError = (error: any, context: string) => {
     }
 };
 
-export const RESULT_METADATA_PROJECTION = 'id,quiz_id,student_id,score:data->>score,studentName:data->>studentName,studentCode:data->>studentCode,durationSeconds:data->>durationSeconds,submittedAt:data->>submittedAt,totalQuestions:data->>totalQuestions,correctCount:data->>correctCount,wrongCount:data->>wrongCount,unansweredCount:data->>unansweredCount,grade:data->>grade,classId:data->>classId,className:data->>className,academicYear:data->>academicYear,quizId:data->>quizId,quizTitle:data->>quizTitle,quizCategory:data->>quizCategory,quizType:data->>quizType,bonusPoint:data->>bonusPoint,data';
+export const RESULT_METADATA_PROJECTION = 'id,quiz_id,student_id,score:data->>score,studentName:data->>studentName,studentCode:data->>studentCode,durationSeconds:data->>durationSeconds,submittedAt:data->>submittedAt,totalQuestions:data->>totalQuestions,correctCount:data->>correctCount,wrongCount:data->>wrongCount,unansweredCount:data->>unansweredCount,grade:data->>grade,classId:data->>classId,className:data->>className,academicYear:data->>academicYear,quizId:data->>quizId,quizTitle:data->>quizTitle,quizCategory:data->>quizCategory,quizType:data->>quizType,bonusPoint:data->>bonusPoint';
 
 const mapRowToResultMeta = (row: any): Result => {
     if (!row) return {} as Result;

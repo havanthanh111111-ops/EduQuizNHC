@@ -421,23 +421,16 @@ export default function ClassManager({
         const studentCodes = classStudents.map(s => s.studentCode || '').filter(Boolean);
         const studentIds = classStudents.map(s => s.id).filter(Boolean);
 
-        const [specificResults, generalResults] = await Promise.all([
-          getResultsForStudents(studentCodes, studentIds),
-          getResultsMetadata(undefined, 3000, true)
-        ]);
-
-        const mergedMap = new Map<string, Result>();
-        if (generalResults && generalResults.length > 0) {
-          generalResults.forEach(r => { if (r && r.id) mergedMap.set(r.id, r); });
-        }
-        if (specificResults && specificResults.length > 0) {
-          specificResults.forEach(r => { if (r && r.id) mergedMap.set(r.id, r); });
+        if (studentCodes.length === 0 && studentIds.length === 0) {
+          setClassProgressResults([]);
+          return;
         }
 
-        const finalResults = Array.from(mergedMap.values());
-        if (!isCancelled && finalResults.length > 0) {
-          cachedClassProgressResults = finalResults;
-          setClassProgressResults(finalResults);
+        const classStudentResults = await getResultsForStudents(studentCodes, studentIds);
+
+        if (!isCancelled) {
+          cachedClassProgressResults = classStudentResults;
+          setClassProgressResults(classStudentResults);
         }
       } catch (err) {
         console.warn("Lỗi tải kết quả rèn luyện của lớp:", err);
