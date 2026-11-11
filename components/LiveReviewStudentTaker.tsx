@@ -4,7 +4,9 @@ import {
   getLiveReviewSessionById, 
   subscribeToLiveReviewSession, 
   submitLiveReviewAnswer, 
-  getStudentAnswerForQuestion 
+  getStudentAnswerForQuestion,
+  checkIsStudentAnswerCorrect,
+  resolveQuestionCorrectOption
 } from '../services/liveReviewService';
 import { getQuizById } from '../services/storage';
 import { 
@@ -41,13 +43,16 @@ export default function LiveReviewStudentTaker({
   useEffect(() => {
     setSession(initialSession);
     const unsubscribe = subscribeToLiveReviewSession(initialSession.id, updated => {
-      if (updated) {
+      if (updated && updated.status === 'active') {
         setSession(updated);
+      } else {
+        // Giáo viên đã kết thúc buổi sửa bài trực tiếp
+        onExit();
       }
     }, 1200);
 
     return () => unsubscribe();
-  }, [initialSession.id]);
+  }, [initialSession.id, onExit]);
 
   // 2. Tải toàn bộ câu hỏi của đề thi
   useEffect(() => {
@@ -127,17 +132,12 @@ export default function LiveReviewStudentTaker({
     // Cập nhật state UI ngay lập tức
     setMyAnswers(prev => ({ ...prev, [qIdx]: answerValue }));
 
-    // Kiểm tra tính đúng sai sơ bộ
-    let isCorrect = false;
-    if (question.type === 'mcq' && question.correctAnswer) {
-      isCorrect = String(answerValue).trim().toUpperCase() === String(question.correctAnswer).trim().toUpperCase();
-    } else if (question.type === 'short' && question.correctAnswer) {
-      isCorrect = String(answerValue).trim().toLowerCase() === String(question.correctAnswer).trim().toLowerCase();
-    }
+    // Tính toán độ chính xác chính xác dựa trên hàm chuẩn hóa
+    const isCorrect = checkIsStudentAnswerCorrect(question, answerValue);
 
     setIsSubmitting(true);
     try {
-      await submitLiveReviewAnswer(session.id, qIdx, student, answerValue, isCorrect);
+      await submitLiveReviewAnswer(session.id, qIdx, student, answerValue, isCorrect, question);
     } catch (err) {
       console.warn("Lỗi gửi câu trả lời:", err);
     } finally {
@@ -157,9 +157,11 @@ export default function LiveReviewStudentTaker({
     currentTfAnswers[subQuestionId] = value;
     setMyAnswers(prev => ({ ...prev, [qIdx]: currentTfAnswers }));
 
+    const isCorrect = checkIsStudentAnswerCorrect(question, currentTfAnswers);
+
     setIsSubmitting(true);
     try {
-      await submitLiveReviewAnswer(session.id, qIdx, student, currentTfAnswers);
+      await submitLiveReviewAnswer(session.id, qIdx, student, currentTfAnswers, isCorrect, question);
     } catch (err) {
       console.warn("Lỗi gửi câu trả lời TF:", err);
     } finally {
@@ -375,56 +377,61 @@ export default function LiveReviewStudentTaker({
                   {/* KHU VỰC CÁC PHƯƠNG ÁN TRẢ LỜI */}
                   <div className="pt-2">
                     {/* DẠNG 1: TRẮC NGHIỆM 4 LỰA CHỌN (MCQ) */}
-                    {q.type === 'mcq' && q.options && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {q.options.map((opt, optIdx) => {
-                          const optKey = String.fromCharCode(65 + optIdx); // A, B, C, D
-                          const isSelected = myChoice === optKey;
-                          const isCorrectOpt = q.correctAnswer && String(q.correctAnswer).trim().toUpperCase() === optKey;
-                          
-                          // Tô màu đáp án khi Giáo viên bật hiện đáp án
-                          let optionStyle = 'bg-slate-800/80 hover:bg-slate-800 border-slate-700 text-slate-200';
-                          if (isSelected) {
-                            optionStyle = 'bg-blue-600/30 border-blue-500 text-white ring-2 ring-blue-500/30';
-                          }
-                          if (session.showAnswer) {
-                            if (isCorrectOpt) {
-                              optionStyle = 'bg-emerald-600/30 border-emerald-500 text-emerald-200 ring-2 ring-emerald-500/40 font-black';
-                            } else if (isSelected && !isCorrectOpt) {
-                              optionStyle = 'bg-rose-600/30 border-rose-500 text-rose-200';
+                    {q.type === 'mcq' && q.options && (() => {
+                      const { index: correctIdx, letter: correctLetter, text: correctText } = resolveQuestionCorrectOption(q);
+                      return (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {q.options.map((opt, optIdx) => {
+                            const optKey = String.fromCharCode(65 + optIdx); // A, B, C, D
+                            const isSelected = myChoice === optKey;
+                            const isCorrectOpt = (correctIdx >= 0 && optIdx === correctIdx) ||
+                              (correctLetter && optKey === correctLetter) ||
+                              (correctText && opt.trim().toLowerCase() === correctText.trim().toLowerCase());
+                            
+                            // Tô màu đáp án khi Giáo viên bật hiện đáp án
+                            let optionStyle = 'bg-slate-800/80 hover:bg-slate-800 border-slate-700 text-slate-200';
+                            if (isSelected) {
+                              optionStyle = 'bg-blue-600/30 border-blue-500 text-white ring-2 ring-blue-500/30';
                             }
-                          }
+                            if (session.showAnswer) {
+                              if (isCorrectOpt) {
+                                optionStyle = 'bg-emerald-600/30 border-emerald-500 text-emerald-200 ring-2 ring-emerald-500/40 font-black';
+                              } else if (isSelected && !isCorrectOpt) {
+                                optionStyle = 'bg-rose-600/30 border-rose-500 text-rose-200';
+                              }
+                            }
 
-                          return (
-                            <button
-                              key={optIdx}
-                              type="button"
-                              disabled={isCurrentExpired && !session.showAnswer}
-                              onClick={() => handleSelectOption(idx, q, optKey)}
-                              className={`p-4 rounded-2xl border text-left transition-all flex items-start gap-3 ${optionStyle} ${
-                                isCurrentExpired ? 'cursor-default' : 'cursor-pointer'
-                              }`}
-                            >
-                              <span className={`w-8 h-8 rounded-xl font-black text-xs flex items-center justify-center shrink-0 uppercase transition-all ${
-                                isSelected 
-                                  ? 'bg-blue-600 text-white shadow-md' 
-                                  : session.showAnswer && isCorrectOpt
-                                  ? 'bg-emerald-600 text-white'
-                                  : 'bg-slate-700 text-slate-300'
-                              }`}>
-                                {optKey}
-                              </span>
-                              <div className="text-xs sm:text-sm font-medium leading-relaxed pt-1 flex-1">
-                                <LatexText text={opt} />
-                              </div>
-                              {session.showAnswer && isCorrectOpt && (
-                                <CheckCircle2 size={18} className="text-emerald-400 shrink-0 mt-1" />
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
+                            return (
+                              <button
+                                key={optIdx}
+                                type="button"
+                                disabled={isCurrentExpired && !session.showAnswer}
+                                onClick={() => handleSelectOption(idx, q, optKey)}
+                                className={`p-4 rounded-2xl border text-left transition-all flex items-start gap-3 ${optionStyle} ${
+                                  isCurrentExpired ? 'cursor-default' : 'cursor-pointer'
+                                }`}
+                              >
+                                <span className={`w-8 h-8 rounded-xl font-black text-xs flex items-center justify-center shrink-0 uppercase transition-all ${
+                                  isSelected 
+                                    ? 'bg-blue-600 text-white shadow-md' 
+                                    : session.showAnswer && isCorrectOpt
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'bg-slate-700 text-slate-300'
+                                }`}>
+                                  {optKey}
+                                </span>
+                                <div className="text-xs sm:text-sm font-medium leading-relaxed pt-1 flex-1">
+                                  <LatexText text={opt} />
+                                </div>
+                                {session.showAnswer && isCorrectOpt && (
+                                  <CheckCircle2 size={18} className="text-emerald-400 shrink-0 mt-1" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
 
                     {/* DẠNG 2: ĐÚNG / SAI (GROUP TF) */}
                     {q.type === 'group-tf' && q.subQuestions && (

@@ -110,10 +110,36 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
     };
 
     checkLive();
-    const interval = setInterval(checkLive, 4000);
+    const interval = setInterval(checkLive, 3000);
+
+    // Kênh BroadcastChannel để nhận tín hiệu kết thúc hoặc cập nhật 0ms
+    let liveChannel: BroadcastChannel | null = null;
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        liveChannel = new BroadcastChannel('eduquiz_live_review_sync');
+        liveChannel.onmessage = (e) => {
+          if (!isMounted) return;
+          if (e.data?.type === 'SESSION_END') {
+            setLiveReviewSessionCheck(null);
+            setActiveLiveSession(null);
+          } else if (e.data?.type === 'SESSION_UPDATE') {
+            if (e.data.session?.status === 'ended') {
+              setLiveReviewSessionCheck(null);
+              setActiveLiveSession(null);
+            } else {
+              checkLive();
+            }
+          }
+        };
+      }
+    } catch (e) {}
+
     return () => {
       isMounted = false;
       clearInterval(interval);
+      if (liveChannel) {
+        try { liveChannel.close(); } catch (e) {}
+      }
     };
   }, [user]);
 
