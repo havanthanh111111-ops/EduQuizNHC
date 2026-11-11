@@ -41,10 +41,24 @@ export default function LiveReviewStudentTaker({
 
   // 1. Lắng nghe cập nhật phiên trực tiếp từ Giáo viên
   useEffect(() => {
-    setSession(initialSession);
     const unsubscribe = subscribeToLiveReviewSession(initialSession.id, updated => {
       if (updated && updated.status === 'active') {
-        setSession(updated);
+        setSession(prev => {
+          if (
+            prev &&
+            prev.id === updated.id &&
+            prev.currentQuestionIndex === updated.currentQuestionIndex &&
+            prev.isQuestionLocked === updated.isQuestionLocked &&
+            prev.showAnswer === updated.showAnswer &&
+            prev.showSolution === updated.showSolution &&
+            prev.questionActivatedAt === updated.questionActivatedAt &&
+            prev.timeLimitSeconds === updated.timeLimitSeconds &&
+            prev.updatedAt === updated.updatedAt
+          ) {
+            return prev;
+          }
+          return updated;
+        });
       } else {
         // Giáo viên đã kết thúc buổi sửa bài trực tiếp
         onExit();
@@ -80,16 +94,19 @@ export default function LiveReviewStudentTaker({
     if (myAnswers[currentQIdx] === undefined) {
       getStudentAnswerForQuestion(session.id, currentQIdx, student.id).then(ans => {
         if (ans && ans.answer !== undefined) {
-          setMyAnswers(prev => ({ ...prev, [currentQIdx]: ans.answer }));
+          setMyAnswers(prev => {
+            if (prev[currentQIdx] === ans.answer) return prev;
+            return { ...prev, [currentQIdx]: ans.answer };
+          });
         }
       });
     }
-  }, [session.id, session.currentQuestionIndex, student.id]);
+  }, [session.id, session.currentQuestionIndex, student.id, myAnswers]);
 
   // 4. Tính toán thời gian đếm ngược thời gian thực cho câu hỏi đang active
   useEffect(() => {
     if (!session.questionActivatedAt || session.timeLimitSeconds <= 0 || session.isQuestionLocked) {
-      setSecondsLeft(0);
+      setSecondsLeft(prev => (prev === 0 ? prev : 0));
       return;
     }
 
@@ -98,7 +115,7 @@ export default function LiveReviewStudentTaker({
     const updateTimer = () => {
       const now = Date.now();
       const diff = Math.max(0, Math.ceil((targetTime - now) / 1000));
-      setSecondsLeft(diff);
+      setSecondsLeft(prev => (prev === diff ? prev : diff));
     };
 
     updateTimer();
@@ -229,10 +246,10 @@ export default function LiveReviewStudentTaker({
                 isCurrentExpired 
                   ? 'bg-slate-800 border-slate-700 text-slate-400'
                   : secondsLeft <= 10 
-                  ? 'bg-red-500/20 border-red-500/40 text-red-400 animate-pulse'
+                  ? 'bg-red-500/20 border-red-500/40 text-red-400'
                   : 'bg-amber-500/20 border-amber-500/40 text-amber-300'
               }`}>
-                <Clock size={16} className={!isCurrentExpired ? 'animate-spin' : ''} />
+                <Clock size={16} />
                 <div className="text-right">
                   <span className="text-[9px] font-black uppercase tracking-wider block opacity-80 leading-none">
                     {isCurrentExpired ? 'Hết giờ' : 'Thời gian câu'}
@@ -267,7 +284,7 @@ export default function LiveReviewStudentTaker({
           <div className="bg-gradient-to-r from-blue-900/60 via-indigo-900/40 to-slate-900/60 p-4 rounded-3xl border border-blue-500/30 flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-blue-600 rounded-2xl text-white shadow-lg">
-                <Zap size={20} className="animate-pulse" />
+                <Zap size={20} />
               </div>
               <div>
                 <h4 className="text-xs font-black uppercase text-blue-300">
@@ -298,15 +315,15 @@ export default function LiveReviewStudentTaker({
                 <div
                   key={q.id || idx}
                   ref={isActive ? activeQuestionRef : null}
-                  className={`relative rounded-3xl transition-all duration-300 overflow-hidden ${
+                  className={`relative rounded-3xl transition-colors duration-200 overflow-hidden ${
                     isActive
                       ? 'bg-slate-900 border-2 border-blue-500 shadow-2xl ring-4 ring-blue-500/20 p-6 sm:p-8'
-                      : 'bg-slate-900/40 border border-slate-800/80 p-5 opacity-30 filter blur-[1px] pointer-events-none select-none'
+                      : 'bg-slate-900/40 border border-slate-800/80 p-5 opacity-40 pointer-events-none select-none'
                   }`}
                 >
                   {/* OVERLAY NẾU CÂU HỎI CHƯA ĐƯỢC GIÁO VIÊN ACTIVE */}
                   {!isActive && (
-                    <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-[2px] z-10 flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-slate-950/60 z-10 flex items-center justify-center p-4">
                       <div className="bg-slate-900/90 border border-slate-700/80 px-4 py-2 rounded-2xl flex items-center gap-2 shadow-xl">
                         <Lock size={14} className="text-slate-400" />
                         <span className="text-xs font-black uppercase tracking-wider text-slate-300">
