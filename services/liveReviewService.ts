@@ -1,4 +1,4 @@
-import { LiveReviewSession, LiveReviewStudentAnswer, User, Quiz } from '../types';
+import { LiveReviewSession, LiveReviewStudentAnswer, User, Quiz, Question } from '../types';
 import { supabase, isDatabaseConnected, sanitizeForJsonB } from './storage';
 
 // BroadcastChannel để đồng bộ tức thời 0ms giữa các tab cùng trình duyệt
@@ -14,6 +14,141 @@ try {
 const LOCAL_STORAGE_SESSION_PREFIX = 'eduquiz_live_session_';
 const LOCAL_STORAGE_ANSWER_PREFIX = 'eduquiz_live_ans_';
 const LOCAL_STORAGE_PRACTICE_LIST = 'eduquiz_live_reviewed_quizzes_v2';
+
+/**
+ * Phân giải đáp án đúng của câu hỏi trắc nghiệm (hỗ trợ cả dạng A, B, C, D hoặc dạng chuỗi văn bản phương án)
+ */
+export function resolveQuestionCorrectOption(question: Question): { index: number; letter: string; text: string } {
+  if (!question) return { index: -1, letter: '', text: '' };
+
+  const rawCorrect = String(question.correctAnswer || '').trim();
+  const options = question.options || [];
+
+  const cleanOption = (s: string) => 
+    s.trim().toLowerCase().replace(/^[a-d][.)\s:]+/i, '').trim();
+
+  let correctIdx = -1;
+  const upper = rawCorrect.toUpperCase();
+
+  if (['A', 'B', 'C', 'D'].includes(upper)) {
+    correctIdx = upper.charCodeAt(0) - 65;
+  } else if (['0', '1', '2', '3'].includes(rawCorrect)) {
+    correctIdx = parseInt(rawCorrect, 10);
+  } else if (/^[A-D][.)\s]/i.test(rawCorrect)) {
+    correctIdx = rawCorrect[0].toUpperCase().charCodeAt(0) - 65;
+  } else if (options.length > 0) {
+    // So khớp trực tiếp nội dung đáp án trong danh sách options
+    const targetClean = cleanOption(rawCorrect);
+    const match = options.findIndex(opt => {
+      if (opt.trim().toLowerCase() === rawCorrect.toLowerCase()) return true;
+      if (cleanOption(opt) === targetClean) return true;
+      return false;
+    });
+    if (match !== -1) {
+      correctIdx = match;
+    }
+  }
+
+  const letter = (correctIdx >= 0 && correctIdx < 26) ? String.fromCharCode(65 + correctIdx) : upper;
+  const text = (correctIdx >= 0 && options[correctIdx]) ? options[correctIdx] : rawCorrect;
+
+  return { index: correctIdx, letter, text };
+}
+
+/**
+ * Kiểm tra câu trả lời của học sinh có chính xác không (tương thích mọi loại câu hỏi: MCQ, Đúng/Sai, Trả lời ngắn)
+ */
+export function checkIsStudentAnswerCorrect(question: Question, userAnswer: any): boolean {
+  if (!question || userAnswer === undefined || userAnswer === null || userAnswer === '') {
+    return false;
+  }
+
+  // 1. Trắc nghiệm 4 lựa chọn (MCQ)
+  if (question.type === 'mcq') {
+    const { index: correctIdx, letter: correctLetter, text: correctText } = resolveQuestionCorrectOption(question);
+    const rawAns = String(userAnswer).trim();
+    const upperAns = rawAns.toUpperCase();
+
+    // TH1: Học sinh gửi lên chữ cái A, B, C, D
+    if (['A', 'B', 'C', 'D'].includes(upperAns)) {
+      if (correctIdx >= 0) {
+        return upperAns === correctLetter;
+      }
+      return upperAns === String(question.correctAnswer || '').trim().toUpperCase();
+    }
+
+    // TH2: Học sinh gửi lên số chỉ mục 0, 1, 2, 3
+    if (['0', '1', '2', '3'].includes(rawAns)) {
+      return parseInt(rawAns, 10) === correctIdx;
+    }
+
+    // TH3: Học sinh gửi lên toàn bộ chuỗi nội dung đáp án
+    const cleanOption = (s: string) => s.trim().toLowerCase().replace(/^[a-d][.)\s:]+/i, '').trim();
+    if (cleanOption(rawAns) === cleanOption(correctText)) {
+      return true;
+    }
+    if (rawAns.toLowerCase() === String(question.correctAnswer || '').trim().toLowerCase()) {
+      return true;
+    }
+
+    return false;
+  }
+
+  // 2. Câu trả lời ngắn (Short)
+  if (question.type === 'short') {
+    const normalizeShort = (val: any) =>
+      String(val || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '')
+        .replace(/,/g, '.');
+
+    const nAns = normalizeShort(userAnswer);
+    const nCorrect = normalizeShort(question.correctAnswer);
+
+    if (nAns !== '' && nCorrect !== '' && nAns === nCorrect) {
+      return true;
+    }
+
+    // So sánh số học (ví dụ: 2.5 và 2.50)
+    const numAns = parseFloat(nAns);
+    const numCorrect = parseFloat(nCorrect);
+    if (!isNaN(numAns) && !isNaN(numCorrect) && Math.abs(numAns - numCorrect) < 0.0001) {
+      return true;
+    }
+
+    return false;
+  }
+
+  // 3. Câu Đúng / Sai chùm (Group True/False)
+  if (question.type === 'group-tf' && question.subQuestions) {
+    if (typeof userAnswer === 'object' && userAnswer !== null) {
+      let isAllCorrect = true;
+      let answeredCount = 0;
+
+      question.subQuestions.forEach((sq, i) => {
+        const val = userAnswer[sq.id] !== undefined ? userAnswer[sq.id] : userAnswer[i];
+        if (val !== undefined && val !== null) {
+          answeredCount++;
+          const normAns = String(val).trim().toLowerCase();
+          const normCorrect = String(sq.correctAnswer).trim().toLowerCase();
+          const isMatch = (normAns === 'true' && (normCorrect === 'true' || normCorrect === 'đúng')) ||
+                          (normAns === 'false' && (normCorrect === 'false' || normCorrect === 'sai')) ||
+                          normAns === normCorrect;
+          if (!isMatch) {
+            isAllCorrect = false;
+          }
+        } else {
+          isAllCorrect = false;
+        }
+      });
+
+      return answeredCount > 0 && isAllCorrect;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Lưu / Cập nhật phiên sửa bài đố vui trực tiếp (Live Review Session)
@@ -94,45 +229,88 @@ export async function getActiveLiveReviewSessions(): Promise<LiveReviewSession[]
   const now = new Date();
   const sessionsMap = new Map<string, LiveReviewSession>();
 
-  // 1. Quét từ LocalStorage
+  // 1. Quét từ LocalStorage và dọn sạch các phiên đã expired hoặc không còn active
   try {
+    const staleKeys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && key.startsWith(LOCAL_STORAGE_SESSION_PREFIX)) {
         try {
           const s: LiveReviewSession = JSON.parse(localStorage.getItem(key) || '{}');
           if (s && s.id && s.status === 'active') {
-            const end = new Date(s.endTime);
-            if (now.getTime() <= end.getTime()) {
+            const end = s.endTime ? new Date(s.endTime) : null;
+            if (!end || now.getTime() <= end.getTime()) {
               sessionsMap.set(s.id, s);
+            } else {
+              staleKeys.push(key);
             }
+          } else {
+            staleKeys.push(key);
           }
-        } catch (e) {}
+        } catch (e) {
+          staleKeys.push(key);
+        }
       }
     }
+    staleKeys.forEach(k => {
+      try { localStorage.removeItem(k); } catch (e) {}
+    });
   } catch (e) {}
 
-  // 2. Quét từ Supabase Cloud
+  // 2. Quét từ Supabase Cloud (Nguồn dữ liệu tối cao)
   if (isDatabaseConnected() && supabase) {
     try {
       const { data, error } = await supabase
         .from('exam_sessions')
-        .select('data')
+        .select('id, data')
         .like('id', 'live_review_%');
 
-      if (!error && data && Array.isArray(data)) {
+      if (!error && Array.isArray(data)) {
+        const activeCloudIds = new Set<string>();
+
         data.forEach((row: any) => {
           const s = row.data as LiveReviewSession;
-          if (s && s.id && s.status === 'active') {
-            const end = new Date(s.endTime);
-            if (now.getTime() <= end.getTime()) {
+          if (s && s.id) {
+            const end = s.endTime ? new Date(s.endTime) : null;
+            const isStillActive = s.status === 'active' && (!end || now.getTime() <= end.getTime());
+            if (isStillActive) {
+              activeCloudIds.add(s.id);
               sessionsMap.set(s.id, s);
               try {
                 localStorage.setItem(`${LOCAL_STORAGE_SESSION_PREFIX}${s.id}`, JSON.stringify(s));
               } catch (e) {}
+            } else {
+              // Phiên đã ended trên Cloud hoặc quá giờ -> xóa hoàn toàn khỏi local
+              sessionsMap.delete(s.id);
+              try {
+                localStorage.removeItem(`${LOCAL_STORAGE_SESSION_PREFIX}${s.id}`);
+              } catch (e) {}
             }
           }
         });
+
+        // Xóa sạch mọi session trong LocalStorage mà Cloud đã kết thúc hoặc không còn active
+        for (const key of Array.from(sessionsMap.keys())) {
+          if (!activeCloudIds.has(key)) {
+            sessionsMap.delete(key);
+            try {
+              localStorage.removeItem(`${LOCAL_STORAGE_SESSION_PREFIX}${key}`);
+            } catch (e) {}
+          }
+        }
+
+        // Quét thêm một lượt trong localStorage để chắc chắn không còn sót session rác nào
+        try {
+          for (let i = localStorage.length - 1; i >= 0; i--) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith(LOCAL_STORAGE_SESSION_PREFIX)) {
+              const sId = k.slice(LOCAL_STORAGE_SESSION_PREFIX.length);
+              if (!activeCloudIds.has(sId)) {
+                localStorage.removeItem(k);
+              }
+            }
+          }
+        } catch (e) {}
       }
     } catch (err) {
       console.warn("Lỗi tải danh sách Live Review Sessions:", err);
@@ -258,7 +436,27 @@ export async function endLiveReviewSession(session: LiveReviewSession): Promise<
     updatedAt: new Date().toISOString()
   };
 
-  await saveLiveReviewSession(updated);
+  // 1. Xóa ngay khỏi LocalStorage
+  try {
+    localStorage.removeItem(`${LOCAL_STORAGE_SESSION_PREFIX}${session.id}`);
+  } catch (e) {}
+
+  // 2. Broadcast tức thời qua kênh nội bộ cho mọi tab học sinh để lập tức ẩn banner
+  if (liveChannel) {
+    try {
+      liveChannel.postMessage({ type: 'SESSION_END', sessionId: session.id, session: updated });
+    } catch (e) {}
+  }
+
+  // 3. Dọn dẹp trên Supabase Cloud: cập nhật status ended hoặc xóa phiên
+  if (isDatabaseConnected() && supabase) {
+    try {
+      await supabase.from('exam_sessions').delete().eq('id', session.id);
+    } catch (err) {
+      console.warn("Lỗi dọn dẹp Live Review Session trên Supabase:", err);
+    }
+  }
+
   return updated;
 }
 
@@ -270,15 +468,20 @@ export async function submitLiveReviewAnswer(
   qIndex: number,
   student: User,
   answer: any,
-  isCorrect?: boolean
+  isCorrect?: boolean,
+  question?: Question
 ): Promise<LiveReviewStudentAnswer> {
+  const calculatedCorrect = question !== undefined 
+    ? checkIsStudentAnswerCorrect(question, answer) 
+    : isCorrect;
+
   const record: LiveReviewStudentAnswer = {
     studentId: student.id,
     studentName: student.fullName,
     studentCode: student.studentCode || 'N/A',
     answer,
     submittedAt: new Date().toISOString(),
-    isCorrect
+    isCorrect: calculatedCorrect
   };
 
   const answerKey = `live_ans_${sessionId}_q${qIndex}_${student.id}`;
@@ -416,6 +619,8 @@ export function subscribeToLiveReviewSession(
     if (!isSubscribed) return;
     if (e.data?.type === 'SESSION_UPDATE' && e.data?.session?.id === sessionId) {
       onUpdate(e.data.session);
+    } else if (e.data?.type === 'SESSION_END' && e.data?.sessionId === sessionId) {
+      onUpdate(null);
     }
   };
 
@@ -428,7 +633,13 @@ export function subscribeToLiveReviewSession(
     if (!isSubscribed) return;
     try {
       const s = await getLiveReviewSessionById(sessionId);
-      if (isSubscribed) onUpdate(s);
+      if (isSubscribed) {
+        if (!s || s.status !== 'active') {
+          onUpdate(null);
+        } else {
+          onUpdate(s);
+        }
+      }
     } catch (e) {}
   };
 
