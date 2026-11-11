@@ -22,7 +22,8 @@ import {
   endLiveReviewSession, 
   subscribeToLiveReviewSession, 
   subscribeToStudentAnswers, 
-  getStudentAnswersForQuestion 
+  getStudentAnswersForQuestion,
+  resolveQuestionCorrectOption
 } from '../../services/liveReviewService';
 import LiveReviewStatsModal from './LiveReviewStatsModal';
 
@@ -879,6 +880,20 @@ ${currentQ.solution ? `💡 Lời giải: ${currentQ.solution}` : ''}
     setTimeout(() => setCopiedToast(false), 3000);
   };
 
+  // Đảm bảo kết thúc buổi livestream an toàn khi đóng bảng
+  const handleSafeClose = async () => {
+    if (liveSession) {
+      const confirmEnd = window.confirm("Bạn đang mở phiên sửa bài đố vui trực tiếp cho học sinh. Bạn có muốn kết thúc phiên trực tiếp này trước khi thoát không?");
+      if (confirmEnd) {
+        try {
+          await endLiveReviewSession(liveSession);
+          setLiveSession(null);
+        } catch (e) {}
+      }
+    }
+    if (onClose) onClose();
+  };
+
   // Keyboard Navigation (ArrowLeft / ArrowRight)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -888,7 +903,7 @@ ${currentQ.solution ? `💡 Lời giải: ${currentQ.solution}` : ''}
       } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         if (currentIdx > 0) handleChangeQuestion(currentIdx - 1);
       } else if (e.key === 'Escape') {
-        if (onClose) onClose();
+        handleSafeClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -906,7 +921,7 @@ ${currentQ.solution ? `💡 Lời giải: ${currentQ.solution}` : ''}
         <div className="flex items-center gap-3">
           {onClose && (
             <button 
-              onClick={onClose}
+              onClick={handleSafeClose}
               className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 hover:text-white rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition shadow"
               title="Thoát không gian sửa bài (phím ESC)"
             >
@@ -1610,24 +1625,27 @@ ${currentQ.solution ? `💡 Lời giải: ${currentQ.solution}` : ''}
                   )}
 
                   {/* Options Display (For MCQ) */}
-                  {currentQ.type === 'mcq' && currentQ.options && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                      {currentQ.options.map((opt, optIdx) => {
-                        const letter = String.fromCharCode(65 + optIdx);
-                        const isCorrect = showCorrectAnswer && currentQ.correctAnswer && (
-                          currentQ.correctAnswer.trim().toUpperCase() === letter || 
-                          currentQ.correctAnswer.trim() === opt.trim()
-                        );
+                  {currentQ.type === 'mcq' && currentQ.options && (() => {
+                    const { index: correctIdx, letter: correctLetter, text: correctText } = resolveQuestionCorrectOption(currentQ);
+                    return (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                        {currentQ.options.map((opt, optIdx) => {
+                          const letter = String.fromCharCode(65 + optIdx);
+                          const isCorrect = showCorrectAnswer && (
+                            (correctIdx >= 0 && optIdx === correctIdx) ||
+                            (correctLetter && letter === correctLetter) ||
+                            (correctText && opt.trim().toLowerCase() === correctText.trim().toLowerCase())
+                          );
 
-                        return (
-                          <div
-                            key={optIdx}
-                            className={`p-3.5 rounded-xl border transition flex items-start gap-3 ${
-                              isCorrect 
-                                ? 'bg-emerald-950/80 border-emerald-500 text-emerald-200 ring-2 ring-emerald-500/50 shadow-lg' 
-                                : 'bg-slate-900/80 border-slate-700/60 text-slate-200'
-                            }`}
-                          >
+                          return (
+                            <div
+                              key={optIdx}
+                              className={`p-3.5 rounded-xl border transition flex items-start gap-3 ${
+                                isCorrect 
+                                  ? 'bg-emerald-950/80 border-emerald-500 text-emerald-200 ring-2 ring-emerald-500/50 shadow-lg' 
+                                  : 'bg-slate-900/80 border-slate-700/60 text-slate-200'
+                              }`}
+                            >
                             <span className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
                               isCorrect ? 'bg-emerald-500 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
                             }`}>
@@ -1643,7 +1661,8 @@ ${currentQ.solution ? `💡 Lời giải: ${currentQ.solution}` : ''}
                         );
                       })}
                     </div>
-                  )}
+                  );
+                })()}
 
                   {/* SubQuestions Display (For Group True/False) */}
                   {currentQ.type === 'group-tf' && currentQ.subQuestions && (

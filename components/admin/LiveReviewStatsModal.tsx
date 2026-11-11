@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Question, LiveReviewStudentAnswer } from '../../types';
+import { resolveQuestionCorrectOption, checkIsStudentAnswerCorrect } from '../../services/liveReviewService';
 import { 
   BarChart2, X, CheckCircle2, XCircle, Users, Clock, Award, 
   HelpCircle, Eye, EyeOff, Search, FileText, Check
@@ -88,19 +89,28 @@ export default function LiveReviewStatsModal({
 
     if (question.type === 'mcq') {
       const counts: Record<string, number> = { A: 0, B: 0, C: 0, D: 0 };
+      const { index: correctIdx, letter: correctLetter, text: correctText } = resolveQuestionCorrectOption(question);
+
       answers.forEach(a => {
-        const val = String(a.answer || '').trim().toUpperCase();
+        let val = String(a.answer || '').trim().toUpperCase();
+        if (['0', '1', '2', '3'].includes(val)) {
+          val = String.fromCharCode(65 + parseInt(val, 10));
+        } else if (!['A', 'B', 'C', 'D'].includes(val) && question.options) {
+          const matchIdx = question.options.findIndex(opt => opt.trim().toLowerCase() === String(a.answer || '').trim().toLowerCase());
+          if (matchIdx >= 0 && matchIdx < 4) {
+            val = String.fromCharCode(65 + matchIdx);
+          }
+        }
+
         if (counts[val] !== undefined) {
           counts[val]++;
         }
       });
 
-      const correctAnswer = (question.correctAnswer || '').trim().toUpperCase();
-
-      return ['A', 'B', 'C', 'D'].map(key => {
+      return ['A', 'B', 'C', 'D'].map((key, keyIdx) => {
         const count = counts[key] || 0;
         const percent = totalResponses > 0 ? Math.round((count / totalResponses) * 100) : 0;
-        const isCorrect = key === correctAnswer;
+        const isCorrect = (correctLetter && key === correctLetter) || (correctIdx >= 0 && keyIdx === correctIdx);
         return {
           name: `Đáp án ${key}`,
           option: key,
@@ -154,10 +164,8 @@ export default function LiveReviewStatsModal({
       .sort((a, b) => b[1] - a[1])
       .slice(0, 8);
 
-    const correctAns = String(question.correctAnswer || '').trim();
-
     return sortedValues.map(([val, count]) => {
-      const isCorrect = val.toLowerCase() === correctAns.toLowerCase();
+      const isCorrect = checkIsStudentAnswerCorrect(question, val);
       const percent = totalResponses > 0 ? Math.round((count / totalResponses) * 100) : 0;
       return {
         name: val,
@@ -444,9 +452,9 @@ export default function LiveReviewStatsModal({
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-bold text-slate-700">
                     {filteredAnswers.map((ans, idx) => {
-                      const isCorrect = 
-                        question.correctAnswer && 
-                        String(ans.answer).trim().toUpperCase() === String(question.correctAnswer).trim().toUpperCase();
+                      const isCorrect = ans.isCorrect !== undefined 
+                        ? ans.isCorrect 
+                        : checkIsStudentAnswerCorrect(question, ans.answer);
 
                       return (
                         <tr key={ans.studentId || idx} className="hover:bg-slate-50/80 transition-colors">
@@ -459,7 +467,7 @@ export default function LiveReviewStatsModal({
                             </span>
                           </td>
                           <td className="p-3 text-center">
-                            {question.correctAnswer ? (
+                            {question.correctAnswer || question.type === 'group-tf' ? (
                               isCorrect ? (
                                 <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[10px] font-black uppercase border border-emerald-200 inline-flex items-center gap-1">
                                   <CheckCircle2 size={12} /> Chính xác
