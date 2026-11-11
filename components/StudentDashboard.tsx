@@ -101,16 +101,33 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
   useEffect(() => {
     let isMounted = true;
     const checkLive = async () => {
+      // Nếu học sinh đang trong màn hình giải bài trực tiếp, bỏ qua kiểm tra banner để tránh re-render bảng điều khiển
+      if (activeLiveSession) return;
       try {
         const session = await getActiveLiveReviewForStudent(user);
-        if (isMounted) setLiveReviewSessionCheck(session);
+        if (isMounted) {
+          setLiveReviewSessionCheck(prev => {
+            if (!prev && !session) return null;
+            if (
+              prev &&
+              session &&
+              prev.id === session.id &&
+              prev.updatedAt === session.updatedAt &&
+              prev.currentQuestionIndex === session.currentQuestionIndex &&
+              prev.status === session.status
+            ) {
+              return prev;
+            }
+            return session;
+          });
+        }
         const reviewedIds = getLiveReviewedQuizIds();
         if (isMounted) setLiveReviewedQuizIds(reviewedIds);
       } catch (e) {}
     };
 
     checkLive();
-    const interval = setInterval(checkLive, 3000);
+    const interval = setInterval(checkLive, 4000);
 
     // Kênh BroadcastChannel để nhận tín hiệu kết thúc hoặc cập nhật 0ms
     let liveChannel: BroadcastChannel | null = null;
@@ -126,7 +143,7 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
             if (e.data.session?.status === 'ended') {
               setLiveReviewSessionCheck(null);
               setActiveLiveSession(null);
-            } else {
+            } else if (!activeLiveSession) {
               checkLive();
             }
           }
@@ -141,7 +158,7 @@ export default function StudentDashboard({ user, targetQuizId }: StudentDashboar
         try { liveChannel.close(); } catch (e) {}
       }
     };
-  }, [user]);
+  }, [user, activeLiveSession]);
 
   const handleDownloadQuiz = async (quiz: Quiz, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
