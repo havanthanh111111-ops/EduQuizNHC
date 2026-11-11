@@ -13,7 +13,7 @@ const SUPABASE_URL = cleanedUrl;
 
 const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ1ZWx5dXhzenRuaHJ3aW5ybGRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzOTEwMzAsImV4cCI6MjEwNDk2NzAzMH0.J01Qu55HgJDsiChcAY0ZlZkdjSjUXlAN1H82fnyE8Eg').trim();
 
-let supabase: any = null;
+export let supabase: any = null;
 
 try {
   if (SUPABASE_URL && SUPABASE_KEY) {
