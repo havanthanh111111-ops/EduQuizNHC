@@ -91,9 +91,9 @@ export default function QuestionReviewBoard({
   const [isLoadingQuiz, setIsLoadingQuiz] = useState<boolean>(false);
   const [titleName, setTitleName] = useState<string>('Không gian sửa bài');
 
-  // Interactive View Settings
-  const [showSolution, setShowSolution] = useState<boolean>(true);
-  const [showCorrectAnswer, setShowCorrectAnswer] = useState<boolean>(true);
+  // Interactive View Settings (Mặc định ẩn đáp án & lời giải trên màn hình lớn để HS tự giải)
+  const [showSolution, setShowSolution] = useState<boolean>(false);
+  const [showCorrectAnswer, setShowCorrectAnswer] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
   const [fontSize, setFontSize] = useState<'normal' | 'large' | 'xlarge'>('large');
@@ -128,6 +128,9 @@ export default function QuestionReviewBoard({
       const qz = quizzes.find(q => q.id === selectedQuizId);
       if (qz) {
         setTitleName(qz.title);
+        setShowCorrectAnswer(false);
+        setShowSolution(false);
+        setAiExplanation(null);
         if (qz.questions && qz.questions.length > 0) {
           setQuestions(qz.questions);
           setCurrentIdx(0);
@@ -166,6 +169,9 @@ export default function QuestionReviewBoard({
         setSelectedQuizId(matched.id);
         setSourceType('quiz');
         setTitleName(matched.title);
+        setShowCorrectAnswer(false);
+        setShowSolution(false);
+        setAiExplanation(null);
         if (matched.questions && matched.questions.length > 0) {
           setQuestions(matched.questions);
           setCurrentIdx(0);
@@ -365,6 +371,9 @@ export default function QuestionReviewBoard({
   // Chuyển câu hỏi & Tự động đồng bộ câu hỏi sang màn hình học sinh khi đang phát sóng
   const handleChangeQuestion = (newIdx: number) => {
     setCurrentIdx(newIdx);
+    setShowCorrectAnswer(false);
+    setShowSolution(false);
+    setAiExplanation(null);
     if (liveSession) {
       activateLiveReviewQuestion(liveSession, newIdx, liveDurationPerQuestion).then(updated => {
         setLiveSession(updated);
@@ -758,11 +767,17 @@ export default function QuestionReviewBoard({
           setTitleName(file.name.replace('.json', ''));
           setSourceType('file');
           setCurrentIdx(0);
+          setShowCorrectAnswer(false);
+          setShowSolution(false);
+          setAiExplanation(null);
         } else if (parsed?.questions && Array.isArray(parsed.questions)) {
           setQuestions(parsed.questions);
           setTitleName(parsed.title || file.name.replace('.json', ''));
           setSourceType('file');
           setCurrentIdx(0);
+          setShowCorrectAnswer(false);
+          setShowSolution(false);
+          setAiExplanation(null);
         } else {
           alert('File JSON không đúng cấu trúc đề thi');
         }
@@ -782,6 +797,9 @@ export default function QuestionReviewBoard({
           setTitleName(file.name.replace('.pdf', ''));
           setSourceType('file');
           setCurrentIdx(0);
+          setShowCorrectAnswer(false);
+          setShowSolution(false);
+          setAiExplanation(null);
         } else {
           alert('Không tìm thấy câu hỏi từ file PDF này');
         }
@@ -794,6 +812,9 @@ export default function QuestionReviewBoard({
           setTitleName(file.name);
           setSourceType('file');
           setCurrentIdx(0);
+          setShowCorrectAnswer(false);
+          setShowSolution(false);
+          setAiExplanation(null);
         } else {
           alert('Không trích xuất được câu hỏi từ tệp tin');
         }
@@ -1031,29 +1052,29 @@ ${currentQ.solution ? `💡 Lời giải: ${currentQ.solution}` : ''}
           {/* Answer Toggle */}
           <button
             onClick={() => setShowCorrectAnswer(!showCorrectAnswer)}
-            className={`px-2.5 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition ${
+            className={`px-2.5 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition cursor-pointer ${
               showCorrectAnswer 
                 ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700' 
                 : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
             }`}
-            title="Hiện/Ẩn đáp án đúng"
+            title={showCorrectAnswer ? 'Nhấn để ẩn đáp án đúng' : 'Nhấn để hiển thị đáp án đúng'}
           >
-            {showCorrectAnswer ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <EyeOff className="w-3.5 h-3.5" />}
-            <span className="hidden sm:inline">{showCorrectAnswer ? 'Đã hiện đáp án' : 'Ẩn đáp án'}</span>
+            {showCorrectAnswer ? <EyeOff className="w-3.5 h-3.5 text-emerald-400" /> : <Eye className="w-3.5 h-3.5 text-emerald-400" />}
+            <span className="hidden sm:inline">{showCorrectAnswer ? 'Ẩn đáp án' : 'Hiện đáp án'}</span>
           </button>
 
           {/* Solution Toggle */}
           <button
             onClick={() => setShowSolution(!showSolution)}
-            className={`px-2.5 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition ${
+            className={`px-2.5 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition cursor-pointer ${
               showSolution 
                 ? 'bg-amber-950/80 text-amber-300 border-amber-700' 
                 : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
             }`}
-            title="Hiện/Ẩn lời giải chi tiết"
+            title={showSolution ? 'Nhấn để ẩn lời giải chi tiết' : 'Nhấn để hiển thị lời giải chi tiết'}
           >
-            <Eye className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">{showSolution ? 'Hiện lời giải' : 'Ẩn lời giải'}</span>
+            {showSolution ? <EyeOff className="w-3.5 h-3.5 text-amber-400" /> : <Eye className="w-3.5 h-3.5 text-amber-400" />}
+            <span className="hidden sm:inline">{showSolution ? 'Ẩn lời giải' : 'Hiện lời giải'}</span>
           </button>
 
           {/* Text Size Switcher */}
@@ -1597,6 +1618,18 @@ ${currentQ.solution ? `💡 Lời giải: ${currentQ.solution}` : ''}
                     </div>
 
                     <div className="flex items-center gap-2 relative z-40 pointer-events-auto">
+                      <button
+                        onClick={() => setShowCorrectAnswer(!showCorrectAnswer)}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition shadow cursor-pointer ${
+                          showCorrectAnswer
+                            ? 'bg-emerald-950/90 hover:bg-emerald-900 border-emerald-600 text-emerald-300'
+                            : 'bg-slate-900/90 hover:bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+                        }`}
+                        title={showCorrectAnswer ? 'Nhấn để ẩn đáp án đúng' : 'Nhấn để hiển thị đáp án đúng'}
+                      >
+                        {showCorrectAnswer ? <EyeOff className="w-3.5 h-3.5 text-emerald-400" /> : <Eye className="w-3.5 h-3.5 text-emerald-400" />}
+                        <span>{showCorrectAnswer ? 'Ẩn đáp án' : 'Hiện đáp án'}</span>
+                      </button>
                       <button
                         onClick={handleGenerateAiNotes}
                         disabled={isGeneratingAi}
