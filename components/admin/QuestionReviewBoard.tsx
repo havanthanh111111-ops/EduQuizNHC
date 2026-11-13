@@ -16,6 +16,8 @@ import {
   saveLiveReviewSession, 
   getActiveLiveReviewSessions, 
   activateLiveReviewQuestion, 
+  extendLiveReviewQuestionTimer,
+  clearLiveReviewQuestionAnswers,
   lockLiveReviewQuestion, 
   toggleLiveReviewAnswer, 
   toggleLiveReviewSolution, 
@@ -61,6 +63,11 @@ export default function QuestionReviewBoard({
     initialQuizId || (quizzes.length > 0 ? quizzes[0].id : '')
   );
 
+  const toLocalDateTimeInputValue = (date: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+
   // ==========================================
   // LIVE INTERACTIVE REVIEW SESSION STATE (ĐỐ VUI)
   // ==========================================
@@ -70,12 +77,12 @@ export default function QuestionReviewBoard({
   const [liveStartTime, setLiveStartTime] = useState<string>(() => {
     const d = new Date();
     d.setMinutes(d.getMinutes() - 2);
-    return d.toISOString().slice(0, 16);
+    return toLocalDateTimeInputValue(d);
   });
   const [liveEndTime, setLiveEndTime] = useState<string>(() => {
     const d = new Date();
     d.setMinutes(d.getMinutes() + 90);
-    return d.toISOString().slice(0, 16);
+    return toLocalDateTimeInputValue(d);
   });
   const [liveDurationPerQuestion, setLiveDurationPerQuestion] = useState<number>(60);
   const [allowPracticeRetry, setAllowPracticeRetry] = useState<boolean>(true);
@@ -83,6 +90,7 @@ export default function QuestionReviewBoard({
   const [isStatsModalOpen, setIsStatsModalOpen] = useState<boolean>(false);
   const [questionCountdown, setQuestionCountdown] = useState<number>(0);
   const [isStartingLive, setIsStartingLive] = useState<boolean>(false);
+  const isLockingRef = useRef<boolean>(false);
   
   // Loaded Questions
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -194,17 +202,22 @@ export default function QuestionReviewBoard({
     return () => { isMounted = false; };
   }, [initialQuizId, quizzes]);
 
-  // Kiểm tra phiên sửa bài đố vui đang mở trên hệ thống cho đề thi này
+  // Kiểm tra phiên sửa bài đố vui đang mở trên hệ thống cho đúng đề thi này
   useEffect(() => {
+    let isCancelled = false;
     getActiveLiveReviewSessions().then(sessions => {
-      if (sessions && sessions.length > 0) {
-        const match = sessions.find(s => s.quizId === selectedQuizId) || sessions[0];
-        if (match) {
-          setLiveSession(match);
-          setSelectedLiveClassIds(match.targetClassIds || []);
-        }
+      if (isCancelled) return;
+      if (sessions && sessions.length > 0 && selectedQuizId) {
+        const match = sessions.find(s => s.quizId === selectedQuizId) || null;
+        setLiveSession(match);
+        setSelectedLiveClassIds(match?.targetClassIds || []);
+        if (!match) setStudentLiveAnswers([]);
+      } else {
+        setLiveSession(null);
+        setStudentLiveAnswers([]);
       }
     });
+    return () => { isCancelled = true; };
   }, [selectedQuizId]);
 
   // Lắng nghe cập nhật phiên sửa bài và câu trả lời học sinh theo thời gian thực
@@ -214,23 +227,60 @@ export default function QuestionReviewBoard({
       return;
     }
 
+    let isActive = true;
+    const currentActivationId = liveSession.activationId;
+
     const unsubSession = subscribeToLiveReviewSession(liveSession.id, updated => {
+      if (!isActive) return;
       if (updated) {
-        setLiveSession(updated);
+        setLiveSession(prev => {
+          if (
+            prev &&
+            prev.id === updated.id &&
+            prev.currentQuestionIndex === updated.currentQuestionIndex &&
+            prev.activationId === updated.activationId &&
+            prev.isQuestionLocked === updated.isQuestionLocked &&
+            prev.showAnswer === updated.showAnswer &&
+            prev.showSolution === updated.showSolution &&
+            prev.questionActivatedAt === updated.questionActivatedAt &&
+            prev.timeLimitSeconds === updated.timeLimitSeconds &&
+            prev.updatedAt === updated.updatedAt
+          ) {
+            return prev;
+          }
+          return updated;
+        });
+      } else {
+        setLiveSession(null);
+        setStudentLiveAnswers([]);
       }
     });
 
-    const unsubAnswers = subscribeToStudentAnswers(liveSession.id, currentIdx, answers => {
-      setStudentLiveAnswers(answers);
+    const unsubAnswers = subscribeToStudentAnswers(
+      liveSession.id,
+      currentIdx,
+      answers => {
+        if (isActive) setStudentLiveAnswers(answers);
+      },
+      1500,
+      currentActivationId
+    );
+
+    getStudentAnswersForQuestion(liveSession.id, currentIdx, currentActivationId).then(answers => {
+      if (isActive) setStudentLiveAnswers(answers);
     });
 
-    getStudentAnswersForQuestion(liveSession.id, currentIdx).then(setStudentLiveAnswers);
-
     return () => {
+      isActive = false;
       unsubSession();
       unsubAnswers();
     };
-  }, [liveSession?.id, currentIdx]);
+  }, [liveSession?.id, liveSession?.activationId, currentIdx]);
+
+  // Reset guard mỗi khi câu hỏi được kích hoạt lại
+  useEffect(() => {
+    isLockingRef.current = false;
+  }, [liveSession?.id, liveSession?.questionActivatedAt, liveSession?.currentQuestionIndex, liveSession?.activationId]);
 
   // Đếm ngược thời gian câu hỏi hiện tại trên màn hình Giáo viên
   useEffect(() => {
@@ -246,8 +296,11 @@ export default function QuestionReviewBoard({
       const diff = Math.max(0, Math.ceil((targetTime - now) / 1000));
       setQuestionCountdown(diff);
 
-      if (diff === 0 && !liveSession.isQuestionLocked) {
-        lockLiveReviewQuestion(liveSession).then(updated => setLiveSession(updated));
+      if (diff === 0 && !liveSession.isQuestionLocked && !isLockingRef.current) {
+        isLockingRef.current = true;
+        lockLiveReviewQuestion(liveSession)
+          .then(updated => setLiveSession(updated))
+          .catch(() => { isLockingRef.current = false; });
       }
     };
 
@@ -255,7 +308,7 @@ export default function QuestionReviewBoard({
     const interval = setInterval(updateCountdown, 500);
 
     return () => clearInterval(interval);
-  }, [liveSession?.questionActivatedAt, liveSession?.timeLimitSeconds, liveSession?.isQuestionLocked]);
+  }, [liveSession?.id, liveSession?.questionActivatedAt, liveSession?.timeLimitSeconds, liveSession?.isQuestionLocked]);
 
   // Bắt đầu buổi sửa bài trực tiếp
   const handleStartLiveSession = async () => {
@@ -290,6 +343,7 @@ export default function QuestionReviewBoard({
         currentQuestionIndex: currentIdx,
         timeLimitSeconds: liveDurationPerQuestion,
         questionActivatedAt: new Date().toISOString(),
+        activationId: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         isQuestionLocked: false,
         showAnswer: false,
         showSolution: false,
@@ -298,6 +352,7 @@ export default function QuestionReviewBoard({
         updatedAt: new Date().toISOString()
       };
 
+      setStudentLiveAnswers([]);
       await saveLiveReviewSession(newSession);
       setLiveSession(newSession);
       setIsLiveSetupOpen(false);
@@ -309,12 +364,23 @@ export default function QuestionReviewBoard({
     }
   };
 
-  // Kích hoạt câu hỏi hiện tại & Bắt đầu tính giờ cho HS
+  // Kích hoạt lại câu hỏi hiện tại (xóa câu trả lời cũ để thu thập lượt mới từ 0)
   const handleActivateQuestion = async (durationSec: number = liveDurationPerQuestion) => {
     if (!liveSession) return;
+    setStudentLiveAnswers([]);
     try {
-      const updated = await activateLiveReviewQuestion(liveSession, currentIdx, durationSec);
+      const updated = await activateLiveReviewQuestion(liveSession, currentIdx, durationSec, { clearOldAnswers: true });
       setLiveSession(updated);
+      setStudentLiveAnswers([]);
+    } catch (e) {}
+  };
+
+  // Xóa kết quả đã ghi nhận của câu hiện tại (về 0)
+  const handleResetQuestionAnswers = async () => {
+    if (!liveSession) return;
+    setStudentLiveAnswers([]);
+    try {
+      await clearLiveReviewQuestionAnswers(liveSession.id, currentIdx);
       setStudentLiveAnswers([]);
     } catch (e) {}
   };
@@ -328,12 +394,12 @@ export default function QuestionReviewBoard({
     } catch (e) {}
   };
 
-  // Gia hạn thêm thời gian cho câu hiện tại (VD: +30s)
+  // Gia hạn thêm thời gian cho câu hiện tại (VD: +30s) mà không xóa câu trả lời đã nộp
   const handleExtendQuestionTimer = async (seconds: number = 30) => {
     if (!liveSession) return;
     try {
       const remaining = (questionCountdown > 0 ? questionCountdown : 0) + seconds;
-      const updated = await activateLiveReviewQuestion(liveSession, currentIdx, remaining);
+      const updated = await extendLiveReviewQuestionTimer(liveSession, remaining);
       setLiveSession(updated);
     } catch (e) {}
   };
@@ -364,6 +430,7 @@ export default function QuestionReviewBoard({
     if (confirm("Bạn có chắc chắn muốn kết thúc buổi sửa bài đố vui trực tiếp này không?")) {
       await endLiveReviewSession(liveSession);
       setLiveSession(null);
+      setStudentLiveAnswers([]);
       alert("Đã kết thúc buổi sửa bài trực tiếp!");
     }
   };
@@ -371,13 +438,13 @@ export default function QuestionReviewBoard({
   // Chuyển câu hỏi & Tự động đồng bộ câu hỏi sang màn hình học sinh khi đang phát sóng
   const handleChangeQuestion = (newIdx: number) => {
     setCurrentIdx(newIdx);
+    setStudentLiveAnswers([]);
     setShowCorrectAnswer(false);
     setShowSolution(false);
     setAiExplanation(null);
     if (liveSession) {
       activateLiveReviewQuestion(liveSession, newIdx, liveDurationPerQuestion).then(updated => {
         setLiveSession(updated);
-        setStudentLiveAnswers([]);
       }).catch(() => {});
     }
   };
@@ -909,6 +976,7 @@ ${currentQ.solution ? `💡 Lời giải: ${currentQ.solution}` : ''}
         try {
           await endLiveReviewSession(liveSession);
           setLiveSession(null);
+          setStudentLiveAnswers([]);
         } catch (e) {}
       }
     }
@@ -2055,6 +2123,7 @@ ${currentQ.solution ? `💡 Lời giải: ${currentQ.solution}` : ''}
           onToggleShowAnswer={handleToggleAnswerForStudents}
           onToggleShowSolution={handleToggleSolutionForStudents}
           onLockQuestion={handleLockQuestion}
+          onResetAnswers={handleResetQuestionAnswers}
         />
       )}
     </div>
