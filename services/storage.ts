@@ -194,6 +194,63 @@ export const getResultsMetadata = async (quizId?: string, maxRecords: number = 1
       return [];
   }
 };
+
+/**
+ * Chỉ đếm số bài đã nộp cho danh sách quizIds bằng HEAD count (KHÔNG tải điểm số hay thông tin bài làm).
+ * Lưu cache theo từng quizId để tối ưu băng thông tối đa.
+ */
+export const getQuizSubmissionCounts = async (
+  quizIds: string[],
+  forceRefresh: boolean = false
+): Promise<Record<string, number>> => {
+  const cleanIds = Array.from(new Set((quizIds || []).map(id => String(id || '').trim()).filter(Boolean)));
+  const counts: Record<string, number> = {};
+  if (!supabase || cleanIds.length === 0) return counts;
+
+  const now = Date.now();
+  const missingIds: string[] = [];
+
+  for (const id of cleanIds) {
+    const cacheKey = `quiz_submission_count_${id}`;
+    if (!forceRefresh && memoryCache[cacheKey] && memoryCache[cacheKey].expires > now) {
+      counts[id] = Number(memoryCache[cacheKey].data) || 0;
+    } else {
+      missingIds.push(id);
+    }
+  }
+
+  if (missingIds.length === 0) return counts;
+
+  try {
+    const fetchedEntries = await Promise.all(
+      missingIds.map(async (id) => {
+        const { count, error } = await supabase
+          .from('results')
+          .select('id', { count: 'exact', head: true })
+          .eq('quiz_id', id);
+
+        if (error) {
+          console.warn(`Lỗi đếm số bài nộp cho đề ${id}:`, error);
+          return [id, 0] as const;
+        }
+        const safeCount = typeof count === 'number' ? count : 0;
+        memoryCache[`quiz_submission_count_${id}`] = {
+          data: safeCount,
+          expires: Date.now() + CACHE_TTL
+        };
+        return [id, safeCount] as const;
+      })
+    );
+
+    for (const [id, c] of fetchedEntries) {
+      counts[id] = c;
+    }
+  } catch (e) {
+    console.warn("Lỗi getQuizSubmissionCounts:", e);
+  }
+
+  return counts;
+};
 /**
  * Lấy tất cả kết quả nộp bài của danh sách học sinh theo MAHS (studentCode) và student_id.
  * Giúp màn hình Thống kê Lớp học đối soát CHUẨN XÁC 100% bằng MAHS cho từng học sinh.
@@ -323,6 +380,9 @@ export const saveResult = async (result: Result): Promise<void> => {
   if (!supabase) throw new Error("Mất kết nối Database");
   invalidateCache('student_results');
   invalidateCache('published_results');
+  if (result?.quizId) {
+    invalidateCache(`quiz_submission_count_${result.quizId}`);
+  }
   const sanitizedResult = sanitizeForJsonB(result);
   const payload = { id: sanitizedResult.id, quiz_id: sanitizedResult.quizId, student_id: sanitizedResult.studentId, data: sanitizedResult };
   const { error } = await supabase.from('results').insert(payload);
@@ -333,6 +393,7 @@ export const deleteResult = async (id: string): Promise<void> => {
     if (supabase) {
         invalidateCache('student_results');
         invalidateCache('published_results');
+        invalidateCache('quiz_submission_count_');
         const { error } = await supabase.from('results').delete().eq('id', id);
         handleSupabaseError(error, "Xóa kết quả");
     }
@@ -409,6 +470,58 @@ export const getUsers = async (forceRefresh: boolean = false): Promise<User[]> =
     return result;
   } catch (e) {
     console.error("Lỗi getUsers:", e);
+    return [];
+  }
+};
+
+export interface StudentClassProfile {
+  id: string;
+  studentCode?: string;
+  classId?: string;
+  className?: string;
+  grade?: Grade;
+}
+
+export const getStudentClassProfiles = async (forceRefresh: boolean = false): Promise<StudentClassProfile[]> => {
+  if (!supabase) return [];
+  const cacheKey = 'student_class_profiles';
+  const now = Date.now();
+  if (!forceRefresh && memoryCache[cacheKey] && memoryCache[cacheKey].expires > now) {
+    return memoryCache[cacheKey].data;
+  }
+  try {
+    let allRows: any[] = [];
+    let from = 0;
+    const step = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('users')
+        .select('id,studentCode:data->>studentCode,classId:data->>classId,className:data->>className,grade:data->>grade')
+        .range(from, from + step - 1);
+
+      if (error) throw error;
+      if (data && data.length > 0) {
+        allRows = [...allRows, ...data];
+        from += step;
+        if (data.length < step) hasMore = false;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    const profiles: StudentClassProfile[] = allRows.map((row: any) => ({
+      id: String(row.id || ''),
+      studentCode: row.studentCode || undefined,
+      classId: row.classId || undefined,
+      className: row.className || undefined,
+      grade: (row.grade as Grade) || undefined,
+    }));
+    memoryCache[cacheKey] = { data: profiles, expires: now + CACHE_TTL };
+    return profiles;
+  } catch (e) {
+    console.warn("Lỗi getStudentClassProfiles:", e);
     return [];
   }
 };
