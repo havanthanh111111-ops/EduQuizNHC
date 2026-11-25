@@ -1,18 +1,22 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Question, QuestionType, Grade, Chapter, QuestionLevel } from '../../types';
+import { Question, QuestionType, Grade, Chapter, QuestionLevel, Quiz } from '../../types';
 import { 
     Database, Search, CheckCircle2, CheckSquare, Square, X, BookOpen, Bookmark, 
     Image as ImageIcon, Eye, MousePointer, Maximize2, Layers, FolderTree, Zap, 
-    Edit3, Trash2, Plus, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight 
+    Edit3, Trash2, Plus, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
+    FileText, Loader2
 } from 'lucide-react';
 import LatexText from '../LatexText';
 import { v4 as uuidv4 } from 'uuid';
 import { isExamOrNonChapterName, STANDARD_CHAPTERS, getChapterNumberFromName } from './MatrixQuizGenerator';
+import { getQuizById, getCurrentAcademicYear } from '../../services/storage';
 
 interface QuestionBankProps {
     questions: Question[];
     chapters: Chapter[];
+    quizzes?: Quiz[];
+    onRequestQuizzes?: () => void;
     bGradeFilter: Grade | 'all';
     setBGradeFilter: (val: Grade | 'all') => void;
     bChapterFilter: string;
@@ -97,15 +101,27 @@ const getQuestionImageUrl = (q: any): string | null => {
 };
 
 export default function QuestionBank({ 
-    questions, chapters, bGradeFilter, setBGradeFilter, bChapterFilter, setBChapterFilter, bTypeFilter, setBTypeFilter, 
+    questions, chapters, quizzes = [], onRequestQuizzes,
+    bGradeFilter, setBGradeFilter, bChapterFilter, setBChapterFilter, bTypeFilter, setBTypeFilter, 
     bLevelFilter: bLevelFilterProp, setBLevelFilter: setBLevelFilterProp,
     bSearch, setBSearch, bPage, setBPage, totalCount, isLoading, onAddMultiple, onOpenMatrixGenerator, onAddNew, onEdit, onDelete
 }: QuestionBankProps) {
-    // Sử dụng Map<string, Question> để lưu TOÀN BỘ đối tượng câu hỏi đã chọn từ mọi mức độ (Biết, Hiểu, Vận dụng...)
+    // Sử dụng Map<string, Question> để lưu TOÀN BỘ đối tượng câu hỏi đã chọn từ mọi mức độ và nhiều đề thi khác nhau
     const [selectedMap, setSelectedMap] = useState<Map<string, Question>>(new Map());
     const [localPage, setLocalPage] = useState(1);
-    const currentPage = bPage ?? localPage;
-    const setCurrentPage = setBPage ?? setLocalPage;
+
+    // Chế độ lọc: 'chapter' (Theo Chương như mặc định) | 'quiz' (Theo Đề thi có sẵn)
+    const [filterMode, setFilterMode] = useState<'chapter' | 'quiz'>('chapter');
+    const [quizChapterFilter, setQuizChapterFilter] = useState<string>('all');
+    const [quizYearFilter, setQuizYearFilter] = useState<string>('all');
+    const [quizNameSearch, setQuizNameSearch] = useState<string>('');
+    const [selectedQuizId, setSelectedQuizId] = useState<string>('');
+    const [quizTypeFilter, setQuizTypeFilter] = useState<QuestionType | 'all'>('all');
+    const [quizLevelFilter, setQuizLevelFilter] = useState<QuestionLevel | 'all'>('all');
+    const [quizLocalPage, setQuizLocalPage] = useState<number>(1);
+    const [quizQuestionsCache, setQuizQuestionsCache] = useState<Record<string, Question[]>>({});
+    const [isLoadingQuizQuestions, setIsLoadingQuizQuestions] = useState<boolean>(false);
+    const [quizLoadError, setQuizLoadError] = useState<string>('');
 
     const [localLevel, setLocalLevel] = useState<QuestionLevel | 'all'>('B');
     const bLevelFilter = bLevelFilterProp ?? localLevel;
@@ -116,13 +132,199 @@ export default function QuestionBank({
     const [onlyShowSelected, setOnlyShowSelected] = useState(false);
     const [previewImage, setPreviewImage] = useState<string | null>(null);
 
-    const isServerPaged = totalCount !== undefined;
+    const currentAcademicYear = useMemo(() => getCurrentAcademicYear(), []);
+
+    // Khi chuyển sang chế độ Theo Đề có sẵn, tự động gọi nạp danh sách metadata đề nếu chưa có
+    useEffect(() => {
+        if (filterMode === 'quiz' && quizzes.length === 0 && onRequestQuizzes) {
+            onRequestQuizzes();
+        }
+    }, [filterMode, quizzes.length, onRequestQuizzes]);
+
+    // Danh sách niên khóa có trong danh sách đề
+    const availableQuizYears = useMemo(() => {
+        const set = new Set<string>();
+        quizzes.forEach(q => {
+            if (q?.academicYear) set.add(q.academicYear);
+        });
+        return Array.from(set).sort((a, b) => b.localeCompare(a));
+    }, [quizzes]);
+
+    // Danh sách toàn bộ Chương / Danh mục (bao gồm cả KTCK 1, KTTX, Ôn thi...) cho chế độ Theo Đề có sẵn
+    const quizModeChapters = useMemo(() => {
+        const seen = new Set<string>();
+        const list: string[] = [];
+        const addName = (raw?: string | null) => {
+            const clean = (raw || '').trim();
+            if (!clean) return;
+            const key = clean.replace(/\s+/g, ' ').toLowerCase();
+            if (!seen.has(key)) {
+                seen.add(key);
+                list.push(clean);
+            }
+        };
+
+        // 1. Lấy tất cả menu trong chương trình (không loại bỏ KTCK, KTTX...)
+        chapters.forEach(c => {
+            if (bGradeFilter !== 'all' && String(c.grade) !== String(bGradeFilter)) return;
+            addName(c.name || (c as any).title);
+        });
+
+        // 2. Bổ sung thêm các danh mục (category) đang có trên danh sách đề thi thuộc khối đang chọn
+        quizzes.forEach(q => {
+            if (!q) return;
+            const matchGrade = bGradeFilter === 'all' || !q.grade || q.grade === 'all' || String(q.grade) === String(bGradeFilter);
+            if (!matchGrade) return;
+            addName(q.category);
+        });
+
+        return list;
+    }, [chapters, quizzes, bGradeFilter]);
+
+    // Danh sách đề thi nguồn theo Khối, Chương/Mục, Niên khóa, từ khóa tên đề
+    const filteredSourceQuizzes = useMemo(() => {
+        const seen = new Set<string>();
+        const kw = quizNameSearch.trim().toLowerCase();
+        const targetCat = quizChapterFilter === 'all' ? '' : quizChapterFilter.trim().replace(/\s+/g, ' ').toLowerCase();
+        return quizzes
+            .filter(q => {
+                if (!q || !q.id || seen.has(q.id)) return false;
+                seen.add(q.id);
+                const matchGrade = bGradeFilter === 'all' || !q.grade || q.grade === 'all' || String(q.grade) === String(bGradeFilter);
+                const qCat = (q.category || '').trim().replace(/\s+/g, ' ').toLowerCase();
+                const matchChapter = !targetCat || qCat === targetCat;
+                const matchYear =
+                    quizYearFilter === 'all' ||
+                    (quizYearFilter === 'none' ? !q.academicYear : q.academicYear === quizYearFilter);
+                const matchKw =
+                    !kw ||
+                    (q.title || '').toLowerCase().includes(kw) ||
+                    (q.category || '').toLowerCase().includes(kw);
+                return matchGrade && matchChapter && matchYear && matchKw;
+            })
+            .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    }, [quizzes, bGradeFilter, quizChapterFilter, quizYearFilter, quizNameSearch]);
+
+    // Lazy-load câu hỏi của đúng 1 đề đang chọn (tận dụng cache của getQuizById + cache cục bộ)
+    useEffect(() => {
+        if (filterMode !== 'quiz' || !selectedQuizId) {
+            setQuizLoadError('');
+            return;
+        }
+        if (quizQuestionsCache[selectedQuizId]) {
+            setQuizLoadError('');
+            return;
+        }
+
+        let cancelled = false;
+        setIsLoadingQuizQuestions(true);
+        setQuizLoadError('');
+
+        getQuizById(selectedQuizId)
+            .then(fullQuiz => {
+                if (cancelled) return;
+                if (!fullQuiz) {
+                    setQuizLoadError('Không tìm thấy dữ liệu đề thi này.');
+                    return;
+                }
+                const mapped: Question[] = (fullQuiz.questions || []).map((q, idx) => ({
+                    ...q,
+                    id: q.id && String(q.id).trim() ? q.id : `quiz_${fullQuiz.id}_q_${idx}`,
+                    quizTitle: fullQuiz.title || q.quizTitle,
+                    quizGrade: q.quizGrade || fullQuiz.grade,
+                    chapterName: q.chapterName || fullQuiz.category || q.quizCategory,
+                }));
+                setQuizQuestionsCache(prev => ({ ...prev, [selectedQuizId]: mapped }));
+            })
+            .catch(err => {
+                if (!cancelled) {
+                    setQuizLoadError(err?.message || 'Lỗi khi tải câu hỏi của đề thi.');
+                }
+            })
+            .finally(() => {
+                if (!cancelled) setIsLoadingQuizQuestions(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [filterMode, selectedQuizId, quizQuestionsCache]);
+
+    const selectedQuizMeta = useMemo(
+        () => quizzes.find(q => q.id === selectedQuizId) || null,
+        [quizzes, selectedQuizId]
+    );
+
+    const selectedQuizRawQuestions = useMemo(
+        () => (selectedQuizId ? (quizQuestionsCache[selectedQuizId] || []) : []),
+        [selectedQuizId, quizQuestionsCache]
+    );
+
+    // Map số thứ tự gốc của câu trong đề đang mở để hiển thị badge "Câu #1, #2..."
+    const quizQuestionOrderMap = useMemo(() => {
+        const map = new Map<string, number>();
+        selectedQuizRawQuestions.forEach((q, idx) => {
+            map.set(getQKey(q, idx), idx + 1);
+        });
+        return map;
+    }, [selectedQuizRawQuestions]);
+
+    const isServerPaged = filterMode === 'chapter' && !onlyShowSelected && totalCount !== undefined;
+
+    const currentPage = onlyShowSelected
+        ? localPage
+        : filterMode === 'quiz'
+            ? quizLocalPage
+            : (bPage ?? localPage);
+
+    const setCurrentPage = onlyShowSelected
+        ? setLocalPage
+        : filterMode === 'quiz'
+            ? setQuizLocalPage
+            : (bPage ? setBPage! : setLocalPage);
 
     const filteredQuestions = useMemo(() => {
+        if (onlyShowSelected) {
+            const selectedList = Array.from(selectedMap.values());
+            if (!bSearch.trim()) return selectedList;
+            const kw = bSearch.toLowerCase();
+            return selectedList.filter(q =>
+                (q.text || '').toLowerCase().includes(kw) ||
+                (q.quizTitle && q.quizTitle.toLowerCase().includes(kw))
+            );
+        }
+
+        if (filterMode === 'quiz') {
+            return selectedQuizRawQuestions.filter(q => {
+                const qTypeRaw = (q.type || 'mcq').toString().trim().toLowerCase().replace('_', '-');
+                const targetType = quizTypeFilter.toString().trim().toLowerCase().replace('_', '-');
+                const matchType = quizTypeFilter === 'all' || qTypeRaw === targetType;
+
+                let matchLevel = true;
+                if (quizLevelFilter !== 'all') {
+                    if (q.level) {
+                        matchLevel = q.level === quizLevelFilter;
+                    } else if (q.subQuestions && q.subQuestions.length > 0) {
+                        matchLevel = q.subQuestions.some(sq => sq.level === quizLevelFilter);
+                    } else {
+                        matchLevel = false;
+                    }
+                }
+
+                const kw = bSearch.trim().toLowerCase();
+                const matchSearch =
+                    !kw ||
+                    (q.text || '').toLowerCase().includes(kw) ||
+                    (q.context || '').toLowerCase().includes(kw);
+
+                return matchType && matchLevel && matchSearch;
+            });
+        }
+
         if (isServerPaged) return questions;
+
         return questions.filter((q, idx) => {
             const qKey = getQKey(q, idx);
-            // Nếu bật chế độ chỉ xem câu đã chọn
             if (onlyShowSelected && !selectedMap.has(qKey)) {
                 return false;
             }
@@ -186,9 +388,23 @@ export default function QuestionBank({
             
             return matchGrade && matchChapter && matchType && matchLevel && matchSearch;
         });
-    }, [isServerPaged, questions, bGradeFilter, bChapterFilter, bTypeFilter, bLevelFilter, bSearch, onlyShowSelected, selectedMap]);
+    }, [
+        onlyShowSelected,
+        filterMode,
+        selectedQuizRawQuestions,
+        quizTypeFilter,
+        quizLevelFilter,
+        isServerPaged,
+        questions,
+        bGradeFilter,
+        bChapterFilter,
+        bTypeFilter,
+        bLevelFilter,
+        bSearch,
+        selectedMap
+    ]);
 
-    const totalItems = isServerPaged ? totalCount : filteredQuestions.length;
+    const totalItems = isServerPaged ? (totalCount ?? 0) : filteredQuestions.length;
     const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
 
     useEffect(() => {
@@ -196,6 +412,12 @@ export default function QuestionBank({
             setCurrentPage(totalPages);
         }
     }, [totalPages, currentPage, setCurrentPage]);
+
+    useEffect(() => {
+        if (selectedMap.size === 0 && onlyShowSelected) {
+            setOnlyShowSelected(false);
+        }
+    }, [selectedMap.size, onlyShowSelected]);
 
     const visibleQuestions = useMemo(() => {
         if (isServerPaged) {
@@ -303,12 +525,22 @@ export default function QuestionBank({
                     </span>
                     <span className="text-slate-400">/</span>
                     <span className="text-slate-500 font-extrabold">{totalItems} câu</span>
-                    {bChapterFilter !== 'all' && (
+                    {onlyShowSelected ? (
+                        <span className="hidden md:inline-flex items-center gap-1 bg-amber-50 text-amber-800 px-2.5 py-0.5 rounded-lg text-[10px] font-black border border-amber-200">
+                            <Layers size={12} className="shrink-0 text-amber-600" />
+                            <span>Đang xem toàn bộ câu đã chọn từ các nguồn</span>
+                        </span>
+                    ) : filterMode === 'quiz' && selectedQuizMeta ? (
+                        <span className="hidden md:inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2.5 py-0.5 rounded-lg text-[10px] font-black border border-blue-200 truncate max-w-[320px]" title={`Đề đang mở: ${selectedQuizMeta.title}`}>
+                            <FileText size={12} className="shrink-0 text-blue-600" />
+                            <span className="truncate">{selectedQuizMeta.title}</span>
+                        </span>
+                    ) : filterMode === 'chapter' && bChapterFilter !== 'all' ? (
                         <span className="hidden md:inline-flex items-center gap-1 bg-purple-50 text-purple-700 px-2.5 py-0.5 rounded-lg text-[10px] font-black border border-purple-200 truncate max-w-[280px]" title={`Chương hiện hành: ${bChapterFilter}`}>
                             <FolderTree size={12} className="shrink-0 text-purple-600" />
                             <span className="truncate">{bChapterFilter}</span>
                         </span>
-                    )}
+                    ) : null}
                 </div>
 
                 {totalPages > 1 && (
@@ -386,98 +618,245 @@ export default function QuestionBank({
             {/* Thanh công cụ và bộ lọc */}
             <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm sticky top-0 z-30 flex flex-col gap-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
-                        <select 
-                            className="bg-slate-50 border px-3 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none focus:border-blue-500" 
-                            value={bGradeFilter} 
-                            onChange={e => { 
-                                setBGradeFilter(e.target.value as any); 
-                                setBChapterFilter('all'); 
-                                setCurrentPage(1);
-                            }}
-                        >
-                            <option value="all">Khối: Tất cả</option>
-                            <option value="12">Khối 12</option>
-                            <option value="11">Khối 11</option>
-                            <option value="10">Khối 10</option>
-                        </select>
-                        <select 
-                            className="bg-slate-50 border px-3 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none max-w-[150px] focus:border-blue-500" 
-                            value={bChapterFilter} 
-                            onChange={e => {
-                                setBChapterFilter(e.target.value);
-                                setCurrentPage(1);
-                            }}
-                        >
-                            <option value="all">Chương: Tất cả</option>
-                            {(() => {
-                                const validDb = chapters.filter(c => {
-                                    const rawName = c.name || (c as any).title || '';
-                                    if (isExamOrNonChapterName(rawName)) return false;
-                                    if (bGradeFilter !== 'all') {
-                                        return String(c.grade) === String(bGradeFilter) && getChapterNumberFromName(rawName, bGradeFilter as Grade) > 0;
-                                    }
-                                    const g = (c.grade || '12') as Grade;
-                                    return getChapterNumberFromName(rawName, g) > 0;
-                                });
-                                if (validDb.length > 0) {
-                                    return validDb.map(c => (
-                                        <option key={c.id} value={c.name}>{c.name || (c as any).title || "Chương chưa đặt tên"}</option>
-                                    ));
-                                }
-                                if (bGradeFilter !== 'all' && STANDARD_CHAPTERS[bGradeFilter as Grade]) {
-                                    return STANDARD_CHAPTERS[bGradeFilter as Grade].map(sc => (
-                                        <option key={sc.id} value={sc.name}>{sc.name}</option>
-                                    ));
-                                }
-                                return null;
-                            })()}
-                        </select>
-                        <select 
-                            className="bg-slate-50 border px-3 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none focus:border-blue-500" 
-                            value={bTypeFilter} 
-                            onChange={e => {
-                                setBTypeFilter(e.target.value as any);
-                                setCurrentPage(1);
-                            }}
-                        >
-                            <option value="all">Dạng: Tất cả</option>
-                            <option value="mcq">P.I (MCQ - 4 Lựa chọn)</option>
-                            <option value="group-tf">P.II (Đúng/Sai)</option>
-                            <option value="short">P.III (Trả lời ngắn)</option>
-                        </select>
-                        <select 
-                            className="bg-slate-50 border px-3 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none focus:border-blue-500 font-bold" 
-                            value={bLevelFilter} 
-                            onChange={e => {
-                                setBLevelFilter(e.target.value as any);
-                                setCurrentPage(1);
-                            }}
-                        >
-                            <option value="B">🟢 [B] Biết</option>
-                            <option value="H">🔵 [H] Hiểu</option>
-                            <option value="VD">🟠 [VD] Vận dụng</option>
-                            <option value="VDC">🔴 [VDC] Vận dụng cao</option>
-                            <option value="all">Mức độ: Tất cả</option>
-                        </select>
-                        <button 
-                            onClick={() => { 
-                                setBGradeFilter('12'); 
-                                setBChapterFilter('Chương 1: vật lý nhiệt'); 
-                                setBTypeFilter('mcq'); 
-                                setBLevelFilter('B'); 
-                                setBSearch(''); 
-                                setOnlyShowSelected(false); 
-                                setCurrentPage(1);
-                            }}
-                            className="bg-red-50 hover:bg-red-100 text-red-500 border border-red-100 px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase transition-colors"
-                        >
-                            Xóa lọc
-                        </button>
+                    <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+                        {/* Nút chuyển đổi chế độ lọc: Theo Chương <-> Theo Đề có sẵn */}
+                        <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setFilterMode('chapter');
+                                    setOnlyShowSelected(false);
+                                }}
+                                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer ${
+                                    filterMode === 'chapter'
+                                        ? 'bg-white text-purple-700 shadow-xs'
+                                        : 'text-slate-500 hover:text-slate-800'
+                                }`}
+                                title="Lọc câu hỏi trong Ngân hàng theo Chương"
+                            >
+                                <FolderTree size={12} />
+                                <span>Theo Chương</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setFilterMode('quiz');
+                                    setOnlyShowSelected(false);
+                                    setQuizLocalPage(1);
+                                }}
+                                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer ${
+                                    filterMode === 'quiz'
+                                        ? 'bg-blue-600 text-white shadow-xs'
+                                        : 'text-slate-500 hover:text-slate-800'
+                                }`}
+                                title="Mở trực tiếp các đề thi hiện có để nhặt câu từ nhiều đề ghép thành đề mới"
+                            >
+                                <FileText size={12} />
+                                <span>Theo Đề có sẵn</span>
+                            </button>
+                        </div>
+
+                        {filterMode === 'chapter' ? (
+                            <>
+                                <select 
+                                    className="bg-slate-50 border px-3 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none focus:border-blue-500" 
+                                    value={bGradeFilter} 
+                                    onChange={e => { 
+                                        setBGradeFilter(e.target.value as any); 
+                                        setBChapterFilter('all'); 
+                                        setCurrentPage(1);
+                                    }}
+                                >
+                                    <option value="all">Khối: Tất cả</option>
+                                    <option value="12">Khối 12</option>
+                                    <option value="11">Khối 11</option>
+                                    <option value="10">Khối 10</option>
+                                </select>
+                                <select 
+                                    className="bg-slate-50 border px-3 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none max-w-[150px] focus:border-blue-500" 
+                                    value={bChapterFilter} 
+                                    onChange={e => {
+                                        setBChapterFilter(e.target.value);
+                                        setCurrentPage(1);
+                                    }}
+                                >
+                                    <option value="all">Chương: Tất cả</option>
+                                    {(() => {
+                                        const validDb = chapters.filter(c => {
+                                            const rawName = c.name || (c as any).title || '';
+                                            if (isExamOrNonChapterName(rawName)) return false;
+                                            if (bGradeFilter !== 'all') {
+                                                return String(c.grade) === String(bGradeFilter) && getChapterNumberFromName(rawName, bGradeFilter as Grade) > 0;
+                                            }
+                                            const g = (c.grade || '12') as Grade;
+                                            return getChapterNumberFromName(rawName, g) > 0;
+                                        });
+                                        if (validDb.length > 0) {
+                                            return validDb.map(c => (
+                                                <option key={c.id} value={c.name}>{c.name || (c as any).title || "Chương chưa đặt tên"}</option>
+                                            ));
+                                        }
+                                        if (bGradeFilter !== 'all' && STANDARD_CHAPTERS[bGradeFilter as Grade]) {
+                                            return STANDARD_CHAPTERS[bGradeFilter as Grade].map(sc => (
+                                                <option key={sc.id} value={sc.name}>{sc.name}</option>
+                                            ));
+                                        }
+                                        return null;
+                                    })()}
+                                </select>
+                                <select 
+                                    className="bg-slate-50 border px-3 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none focus:border-blue-500" 
+                                    value={bTypeFilter} 
+                                    onChange={e => {
+                                        setBTypeFilter(e.target.value as any);
+                                        setCurrentPage(1);
+                                    }}
+                                >
+                                    <option value="all">Dạng: Tất cả</option>
+                                    <option value="mcq">P.I (MCQ - 4 Lựa chọn)</option>
+                                    <option value="group-tf">P.II (Đúng/Sai)</option>
+                                    <option value="short">P.III (Trả lời ngắn)</option>
+                                </select>
+                                <select 
+                                    className="bg-slate-50 border px-3 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none focus:border-blue-500 font-bold" 
+                                    value={bLevelFilter} 
+                                    onChange={e => {
+                                        setBLevelFilter(e.target.value as any);
+                                        setCurrentPage(1);
+                                    }}
+                                >
+                                    <option value="B">🟢 [B] Biết</option>
+                                    <option value="H">🔵 [H] Hiểu</option>
+                                    <option value="VD">🟠 [VD] Vận dụng</option>
+                                    <option value="VDC">🔴 [VDC] Vận dụng cao</option>
+                                    <option value="all">Mức độ: Tất cả</option>
+                                </select>
+                                <button 
+                                    onClick={() => { 
+                                        setBGradeFilter('12'); 
+                                        setBChapterFilter('Chương 1: vật lý nhiệt'); 
+                                        setBTypeFilter('mcq'); 
+                                        setBLevelFilter('B'); 
+                                        setBSearch(''); 
+                                        setOnlyShowSelected(false); 
+                                        setCurrentPage(1);
+                                    }}
+                                    className="bg-red-50 hover:bg-red-100 text-red-500 border border-red-100 px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase transition-colors"
+                                >
+                                    Xóa lọc
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <select 
+                                    className="bg-slate-50 border px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none focus:border-blue-500" 
+                                    value={bGradeFilter} 
+                                    onChange={e => { 
+                                        setBGradeFilter(e.target.value as any);
+                                        setQuizChapterFilter('all');
+                                        setSelectedQuizId('');
+                                        setQuizLocalPage(1);
+                                    }}
+                                >
+                                    <option value="all">Khối: Tất cả</option>
+                                    <option value="12">Khối 12</option>
+                                    <option value="11">Khối 11</option>
+                                    <option value="10">Khối 10</option>
+                                </select>
+                                <select
+                                    className="bg-purple-50/70 border border-purple-200 text-purple-950 px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none max-w-[190px] focus:border-blue-500"
+                                    value={quizChapterFilter}
+                                    onChange={e => {
+                                        setQuizChapterFilter(e.target.value);
+                                        setSelectedQuizId('');
+                                        setQuizLocalPage(1);
+                                    }}
+                                >
+                                    <option value="all">Chương / Mục: Tất cả</option>
+                                    {quizModeChapters.map(chName => (
+                                        <option key={chName} value={chName}>{chName}</option>
+                                    ))}
+                                </select>
+                                <select
+                                    className="bg-amber-50 border border-amber-200 text-amber-900 px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none focus:border-blue-500"
+                                    value={quizYearFilter}
+                                    onChange={e => {
+                                        setQuizYearFilter(e.target.value);
+                                        setSelectedQuizId('');
+                                        setQuizLocalPage(1);
+                                    }}
+                                >
+                                    <option value="all">Niên khóa: Tất cả</option>
+                                    <option value={currentAcademicYear}>⭐ {currentAcademicYear}</option>
+                                    {availableQuizYears
+                                        .filter(yr => yr !== currentAcademicYear)
+                                        .map(yr => (
+                                            <option key={yr} value={yr}>{yr}</option>
+                                        ))}
+                                </select>
+                                <input
+                                    type="text"
+                                    value={quizNameSearch}
+                                    onChange={e => setQuizNameSearch(e.target.value)}
+                                    placeholder="Lọc nhanh tên đề..."
+                                    className="bg-slate-50 border px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-slate-700 outline-none focus:border-blue-500 w-36"
+                                />
+                                <select
+                                    className="bg-blue-50/70 border-2 border-blue-200 text-blue-950 px-3 py-1.5 rounded-lg text-[10px] font-black outline-none focus:border-blue-500 min-w-[220px] max-w-[340px]"
+                                    value={selectedQuizId}
+                                    onChange={e => {
+                                        setSelectedQuizId(e.target.value);
+                                        setQuizLocalPage(1);
+                                        setOnlyShowSelected(false);
+                                    }}
+                                >
+                                    <option value="">
+                                        {filteredSourceQuizzes.length > 0
+                                            ? `-- Chọn đề thi nguồn (${filteredSourceQuizzes.length} đề) --`
+                                            : '-- Không có đề nào phù hợp --'}
+                                    </option>
+                                    {filteredSourceQuizzes.map(qz => {
+                                        const qCount = qz.questionCount || (qz.questions ? qz.questions.length : 0);
+                                        return (
+                                            <option key={qz.id} value={qz.id}>
+                                                [K{qz.grade}] {qz.title} ({qCount} câu)
+                                            </option>
+                                        );
+                                    })}
+                                </select>
+                                <select 
+                                    className="bg-slate-50 border px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none focus:border-blue-500" 
+                                    value={quizTypeFilter} 
+                                    onChange={e => {
+                                        setQuizTypeFilter(e.target.value as any);
+                                        setQuizLocalPage(1);
+                                    }}
+                                >
+                                    <option value="all">Dạng: Tất cả</option>
+                                    <option value="mcq">P.I (MCQ)</option>
+                                    <option value="group-tf">P.II (Đúng/Sai)</option>
+                                    <option value="short">P.III (TL ngắn)</option>
+                                </select>
+                                <select 
+                                    className="bg-slate-50 border px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase outline-none focus:border-blue-500" 
+                                    value={quizLevelFilter} 
+                                    onChange={e => {
+                                        setQuizLevelFilter(e.target.value as any);
+                                        setQuizLocalPage(1);
+                                    }}
+                                >
+                                    <option value="all">Mức độ: Tất cả</option>
+                                    <option value="B">🟢 [B] Biết</option>
+                                    <option value="H">🔵 [H] Hiểu</option>
+                                    <option value="VD">🟠 [VD] Vận dụng</option>
+                                    <option value="VDC">🔴 [VDC] VDC</option>
+                                </select>
+                            </>
+                        )}
                     </div>
 
                     {/* Nút bật/tắt chế độ xem đáp án */}
-                    <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+                    <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl shrink-0">
                         <button
                             type="button"
                             onClick={() => setAlwaysShowOptions(false)}
@@ -508,7 +887,11 @@ export default function QuestionBank({
                         <Search size={14} className="text-slate-400 mr-2 shrink-0"/>
                         <input 
                             className="bg-transparent py-2 text-xs font-medium outline-none w-full text-slate-800 placeholder:text-slate-400" 
-                            placeholder="Tìm kiếm nội dung câu hỏi hoặc tên đề thi..." 
+                            placeholder={
+                                filterMode === 'quiz'
+                                    ? "Tìm nhanh nội dung câu hỏi trong đề đang chọn..."
+                                    : "Tìm kiếm nội dung câu hỏi hoặc tên đề thi..."
+                            }
                             value={bSearch} 
                             onChange={e => {
                                 setBSearch(e.target.value);
@@ -616,7 +999,18 @@ export default function QuestionBank({
             {/* Thanh phân trang trên */}
             {renderPaginationBar()}
 
+            {/* Trạng thái đang tải đề thi nguồn */}
+            {filterMode === 'quiz' && isLoadingQuizQuestions && !onlyShowSelected && (
+                <div className="bg-white rounded-2xl border border-slate-200 py-16 text-center space-y-3">
+                    <Loader2 className="animate-spin text-blue-600 mx-auto" size={32} />
+                    <p className="text-xs font-black uppercase text-slate-500">
+                        Đang tải câu hỏi từ đề thi đã chọn...
+                    </p>
+                </div>
+            )}
+
             {/* Danh sách câu hỏi */}
+            {!(filterMode === 'quiz' && isLoadingQuizQuestions && !onlyShowSelected) && (
             <div className="grid grid-cols-1 gap-2.5">
                 {visibleQuestions.map((bq, idx) => {
                     const qKey = getQKey(bq, idx);
@@ -625,6 +1019,7 @@ export default function QuestionBank({
                     const showOptions = alwaysShowOptions || isHovered;
                     const hasOptions = bq.type === 'mcq' && bq.options && bq.options.length > 0;
                     const imgUrl = getQuestionImageUrl(bq);
+                    const sourceOrder = filterMode === 'quiz' ? quizQuestionOrderMap.get(qKey) : undefined;
 
                     return (
                         <div 
@@ -645,34 +1040,41 @@ export default function QuestionBank({
                                 </div>
 
                                 <div className="flex-1 min-w-0 relative">
-                                    {/* Nút Hiệu chỉnh & Xóa ở góc phải */}
-                                    <div className="absolute top-0 right-0 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                                        {onEdit && (
-                                            <button
-                                                type="button"
-                                                onClick={(e) => { e.stopPropagation(); onEdit(bq); }}
-                                                className="px-2.5 py-1 bg-white border border-slate-200 text-blue-600 hover:bg-blue-50 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 shadow-xs transition-all"
-                                                title="Hiệu chỉnh câu hỏi"
-                                            >
-                                                <Edit3 size={11} />
-                                                <span>Sửa</span>
-                                            </button>
-                                        )}
-                                        {onDelete && (
-                                            <button
-                                                type="button"
-                                                onClick={(e) => { e.stopPropagation(); onDelete(bq); }}
-                                                className="px-2.5 py-1 bg-white border border-slate-200 text-red-600 hover:bg-red-50 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 shadow-xs transition-all"
-                                                title="Xóa câu hỏi khỏi ngân hàng"
-                                            >
-                                                <Trash2 size={11} />
-                                                <span>Xóa</span>
-                                            </button>
-                                        )}
-                                    </div>
+                                    {/* Nút Hiệu chỉnh & Xóa ở góc phải (chỉ hiện trong chế độ Ngân hàng theo Chương) */}
+                                    {filterMode === 'chapter' && (
+                                        <div className="absolute top-0 right-0 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                                            {onEdit && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => { e.stopPropagation(); onEdit(bq); }}
+                                                    className="px-2.5 py-1 bg-white border border-slate-200 text-blue-600 hover:bg-blue-50 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 shadow-xs transition-all"
+                                                    title="Hiệu chỉnh câu hỏi"
+                                                >
+                                                    <Edit3 size={11} />
+                                                    <span>Sửa</span>
+                                                </button>
+                                            )}
+                                            {onDelete && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => { e.stopPropagation(); onDelete(bq); }}
+                                                    className="px-2.5 py-1 bg-white border border-slate-200 text-red-600 hover:bg-red-50 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 shadow-xs transition-all"
+                                                    title="Xóa câu hỏi khỏi ngân hàng"
+                                                >
+                                                    <Trash2 size={11} />
+                                                    <span>Xóa</span>
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
 
                                     {/* Nhãn tag phân loại */}
                                     <div className="flex flex-wrap items-center gap-2 mb-2 pr-24">
+                                        {sourceOrder !== undefined && (
+                                            <span className="text-[8px] font-black px-2 py-0.5 rounded bg-slate-800 text-white uppercase">
+                                                Câu {sourceOrder}
+                                            </span>
+                                        )}
                                         <span className={`text-[8px] font-black px-2 py-0.5 rounded text-white ${
                                             bq.type === 'mcq' ? 'bg-blue-600' : bq.type.includes('tf') ? 'bg-purple-600' : 'bg-orange-600'
                                         }`}>
@@ -852,21 +1254,38 @@ export default function QuestionBank({
                 })}
 
                 {visibleQuestions.length === 0 && (
-                    <div className="py-20 text-center space-y-4 bg-white rounded-2xl border border-slate-100">
-                        <X className="mx-auto text-slate-300" size={48}/>
-                        <p className="text-xs font-black uppercase text-slate-400 tracking-wider">Không tìm thấy câu hỏi nào phù hợp</p>
-                        {onlyShowSelected && (
-                            <button
-                                onClick={() => setOnlyShowSelected(false)}
-                                className="px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-xs font-bold hover:bg-blue-100 transition-colors"
-                            >
-                                Hiển thị lại tất cả câu hỏi
-                            </button>
+                    <div className="py-16 text-center space-y-3 bg-white rounded-2xl border border-slate-100 px-6">
+                        {filterMode === 'quiz' && !selectedQuizId && !onlyShowSelected ? (
+                            <>
+                                <FileText className="mx-auto text-blue-400" size={44}/>
+                                <p className="text-xs font-black uppercase text-slate-700 tracking-wider">
+                                    Chọn đề thi nguồn ở thanh lọc phía trên để xem câu hỏi
+                                </p>
+                                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                                    Bạn có thể chọn vài câu ở Đề X, sau đó đổi sang Đề Y chọn thêm — các câu đã tick vẫn được giữ nguyên trong giỏ chọn để ghép thành đề mới.
+                                </p>
+                            </>
+                        ) : (
+                            <>
+                                <X className="mx-auto text-slate-300" size={48}/>
+                                <p className="text-xs font-black uppercase text-slate-400 tracking-wider">
+                                    {quizLoadError || 'Không tìm thấy câu hỏi nào phù hợp'}
+                                </p>
+                                {onlyShowSelected && (
+                                    <button
+                                        onClick={() => setOnlyShowSelected(false)}
+                                        className="px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-xs font-bold hover:bg-blue-100 transition-colors"
+                                    >
+                                        Hiển thị lại tất cả câu hỏi
+                                    </button>
+                                )}
+                            </>
                         )}
                     </div>
                 )}
 
             </div>
+            )}
 
             {/* Thanh phân trang dưới */}
             {renderPaginationBar()}
