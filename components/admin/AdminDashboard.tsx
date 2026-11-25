@@ -702,6 +702,18 @@ export default function AdminDashboard() {
     return bankQuestions;
   }, [bankQuestions]);
 
+  const ensureQuizzesLoaded = useCallback(async () => {
+    if (!isDatabaseConnected() || quizzesRef.current.length > 0) return;
+    try {
+      const loaded = await getQuizzesMetadata('all');
+      if (loaded && loaded.length > 0) {
+        setQuizzes(loaded);
+      }
+    } catch (e) {
+      console.warn("Lỗi nạp danh sách đề thi cho Ngân hàng:", e);
+    }
+  }, []);
+
   // Lazy-loading: Tự động nạp đúng 40 câu theo bộ lọc khi người dùng đổi Khối, Chương, Dạng, Mức độ hoặc Số trang
   useEffect(() => {
     if (activeTab !== 'bank' && !isBankOpen) return;
@@ -1887,6 +1899,8 @@ export default function AdminDashboard() {
                 </div>
                 <QuestionBank 
                     questions={allAvailableQuestions} chapters={chapters} 
+                    quizzes={quizzes}
+                    onRequestQuizzes={ensureQuizzesLoaded}
                     bGradeFilter={bGradeFilter} setBGradeFilter={(g) => { setBGradeFilter(g); setBPage(1); }}
                     bChapterFilter={bChapterFilter} setBChapterFilter={(ch) => { setBChapterFilter(ch); setBPage(1); }}
                     bTypeFilter={bTypeFilter} setBTypeFilter={(t) => { setBTypeFilter(t); setBPage(1); }}
@@ -1985,6 +1999,8 @@ export default function AdminDashboard() {
                         <QuestionBank 
                             questions={allAvailableQuestions} 
                             chapters={chapters}
+                            quizzes={quizzes}
+                            onRequestQuizzes={ensureQuizzesLoaded}
                             bGradeFilter={bGradeFilter} setBGradeFilter={(g) => { setBGradeFilter(g); setBPage(1); }}
                             bChapterFilter={bChapterFilter} setBChapterFilter={(ch) => { setBChapterFilter(ch); setBPage(1); }}
                             bTypeFilter={bTypeFilter} setBTypeFilter={(t) => { setBTypeFilter(t); setBPage(1); }}
